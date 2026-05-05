@@ -2,8 +2,10 @@ def ClearLayout(layout):
     while layout.count():
         child = layout.takeAt(0)
         if child.widget():
-            layout.removeWidget(child.widget())
-            child.widget().setParent(None)
+            w = child.widget()
+            layout.removeWidget(w)
+            w.hide()
+            w.setParent(None)
 
 
 def ClearFrame(frame):
@@ -16,3 +18,4 @@ def AddToFrame(frame, widget, align=None):
         frame.layout().addWidget(widget)
     else:
         frame.layout().addWidget(widget, 0, align)
+    widget.show()

@@ -1,8 +1,8 @@
 import re
 
-from PySide6.QtWidgets import QWidget, QScrollArea
-from PySide6.QtGui import QFontMetrics, Qt, QPixmap
-from PySide6.QtCore import QEvent
+from PySide6.QtWidgets import QWidget, QScrollArea, QPushButton, QHBoxLayout
+from PySide6.QtGui import QFontMetrics, Qt, QPixmap, QIcon, QCursor
+from PySide6.QtCore import QEvent, QSize
 
 from .modclass import ModClass
 
@@ -12,15 +12,30 @@ from ..ui_sources.ui_mod_button import Ui_ModButton
 class ModButton(QWidget):
     buttons = []
 
-    def __init__(self, modClass: ModClass, method):
+    def __init__(self, modClass: ModClass, method, favoriteMethod):
         self.pressed = False
         self.modClass = modClass
         self.method = method
+        self.favoriteMethod = favoriteMethod
 
         super().__init__()
 
         self.ui = Ui_ModButton()
         self.ui.setupUi(self)
+
+        # Favorite button
+        self.favoriteButton = QPushButton()
+        self.favoriteButton.setFixedSize(QSize(24, 24))
+        self.favoriteButton.setCursor(QCursor(Qt.PointingHandCursor))
+        self.favoriteButton.setStyleSheet("background-color: transparent; border: none;")
+        self.favoriteButton.clicked.connect(self.toggleFavorite)
+        
+        # Insert at the beginning of the horizontal layout inside the background frame
+        self.ui.horizontalLayout_2.insertWidget(0, self.favoriteButton)
+        self.ui.horizontalLayout_2.insertSpacing(1, 10) # Margin between star and text
+        
+        # Increase right margin to prevent status icon from being cut off
+        self.ui.horizontalLayout_2.setContentsMargins(7, 0, 15, 0)
 
         self.updateData()
 
@@ -44,6 +59,19 @@ class ModButton(QWidget):
             self.ui.modState.setPixmap(QPixmap(u":/icons/resources/icons/GhostInstalled.png"))
         else:
             self.ui.modState.setPixmap(QPixmap(u":/icons/resources/icons/NotInstalled.png"))
+
+        # Update favorite icon
+        if self.modClass.favorite:
+            self.favoriteButton.setIcon(QIcon(":/icons/resources/icons/Star_Fill.png"))
+        else:
+            self.favoriteButton.setIcon(QIcon(":/icons/resources/icons/Star.png"))
+        self.favoriteButton.setIconSize(QSize(18, 18))
+
+    def toggleFavorite(self):
+        self.modClass.favorite = not self.modClass.favorite
+        self.updateData()
+        if self.favoriteMethod:
+            self.favoriteMethod(self.modClass.hash)
 
     def onParentResize(self):
         parent = self
@@ -87,12 +115,13 @@ class ModButton(QWidget):
             self.method(self.modClass)
 
     def remove(self):
-        self.layout().removeWidget(self)
+        self.hide()
         self.setParent(None)
 
     def restore(self, frame):
         self.setParent(frame)
         frame.layout().addWidget(self)
+        self.show()
 
     def eventFilter(self, qobject: QWidget, event):
         if event.type() == QEvent.MouseButtonPress:
@@ -100,6 +129,14 @@ class ModButton(QWidget):
 
         return False
 
-    def __del__(self):
+    def eventFilter(self, qobject: QWidget, event):
+        if event.type() == QEvent.MouseButtonPress:
+            self.select()
+
+        return False
+
+    def cleanup(self):
         if self in self.buttons:
-            self.buttons.pop(self.buttons.index(self))
+            self.buttons.remove(self)
+        self.setParent(None)
+        self.deleteLater()

@@ -95,13 +95,19 @@ if __name__ == "__main__":
     else:
         try:
             Run(args.file, args.url)
-        except (ConnectionRefusedError, socket.timeout):
+        except (ConnectionRefusedError, TimeoutError, socket.timeout, OSError):
             if os.path.exists(config["modLoaderPath"]):
                 threading.Thread(target=os.startfile, args=(config["modLoaderPath"], )).start()
+                # Wait up to ~10 minutes for the loader to fully start.
+                # First launch is slow because it has to analyse BrawlhallaAir.swf.
                 i = 0
-                while i < 5:
+                while i < 60:
                     try:
-                        Run(args.file, args.url, 5)
+                        time.sleep(2)
+                        Run(args.file, args.url, 10)
                         sys.exit(0)
-                    except (ConnectionRefusedError, socket.timeout):
+                    except (ConnectionRefusedError, TimeoutError, socket.timeout, OSError):
                         i += 1
+            else:
+                # Loader executable not found – nothing we can do
+                sys.exit(1)

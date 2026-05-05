@@ -9,6 +9,7 @@ import traceback
 import threading
 import webbrowser
 import subprocess
+import requests
 import multiprocessing
 
 # (https://stackoverflow.com/questions/9144724/unknown-encoding-idna-in-python-requests)
@@ -16,23 +17,37 @@ import encodings.idna
 
 from typing import List
 
+# ── Development bootstrap ─────────────────────────────────────────────────────
+# In dev, resolve `import core` to the shared BhModLoaderCore-main package.
+# This file is excluded from production .spec builds — packaged apps use the
+# local core/ folder bundled by PyInstaller.
+try:
+    _bootstrap_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dev_bootstrap.py")
+    if os.path.exists(_bootstrap_path):
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location("dev_bootstrap", _bootstrap_path)
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+except Exception as _e:
+    print(f"[dev_bootstrap] skipped: {_e}")
+# ─────────────────────────────────────────────────────────────────────────────
+
 try:
     import core
     from core import NotificationType, Notification, Environment, CORE_VERSION
 
-    import core.core.ffdec
+    import core.ffdec
 
     JAVA_FOUND = True
 except ImportError as e:
     NotificationType = Notification = Environment = CORE_VERSION = None
+    JAVA_FOUND = False
 
-    if e.msg == "Java not found!":
-        JAVA_FOUND = False
-    else:
-        sys.excepthook(*sys.exc_info())
-from PySide6.QtCore import QSize, QTranslator, QLocale, QTimer, Signal
-from PySide6.QtGui import QIcon, QFontDatabase
-from PySide6.QtWidgets import QMainWindow, QApplication
+    if e.msg != "Java not found!":
+        print(f"Error importing core: {e}")
+from PySide6.QtCore import QSize, QTranslator, QLocale, QTimer, Signal, Qt
+from PySide6.QtGui import QIcon, QFontDatabase, QFont, QClipboard
+from PySide6.QtWidgets import QMainWindow, QApplication, QFrame, QVBoxLayout, QLabel
 
 from ui.ui_handler.window import Window
 from ui.ui_handler.header import HeaderFrame
@@ -46,13 +61,36 @@ from ui.utils.layout import ClearFrame, AddToFrame
 from ui.utils.version import GetLatest, GITHUB, REPO, VERSION, GIT_VERSION, PRERELEASE, GAMEBANANA
 from ui.utils.textformater import TextFormatter
 from ui.utils.mainthread import QExecMainThread
+from ui.utils.config import LoaderConfig
 
+from ui.ui_handler.settings import SettingsFrame
+from ui.ui_handler.gamebanana import GameBananaFrame
 import ui.ui_sources.translate as translate
+
+def get_dir_size(path='.'):
+    total = 0
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                if entry.is_file():
+                    total += entry.stat().st_size
+                elif entry.is_dir():
+                    total += get_dir_size(entry.path)
+    except:
+        pass
+    return total
+
+def format_size(size):
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size < 1024:
+            return f"{size:.2f} {unit}"
+        size /= 1024
+    return f"{size:.2f} TB"
 
 
 SUPPORT_URL = "https://www.patreon.com/bhmodloader"
 
-PROGRAM_NAME = "Brawlhalla ModLoader"
+PROGRAM_NAME = "Brawlhalla Mod Loader"
 
 
 def InitWindowSetText(text):
@@ -62,6 +100,12 @@ def InitWindowSetText(text):
             pyi_splash.update_text(text)
         except:
             pass
+
+def restart_app():
+    # Kill background children before restarting
+    for proc in multiprocessing.active_children():
+        proc.kill()
+    os.execl(sys.executable, sys.executable, *sys.argv)
 
 
 def InitWindowClose():
@@ -151,7 +195,20 @@ class ImportQueue:
 class ModLoader(QMainWindow):
     importQueue = ImportQueue()
 
-    modsPath = os.path.join(os.getcwd(), "Mods")
+    _local_base = (
+        os.path.dirname(sys.executable)
+        if getattr(sys, "frozen", False)
+        else os.path.dirname(os.path.abspath(sys.argv[0]))
+    )
+    _local_mods = os.path.join(_local_base, "Mods")
+
+    config = LoaderConfig()
+    if config.modsPath:
+        modsPath = config.modsPath
+    elif os.path.exists(_local_mods):
+        modsPath = _local_mods
+    else:
+        modsPath = os.path.join(core.MODLOADER_CACHE_PATH, "Mods")
 
     errors: List[Notification] = []
 
@@ -161,6 +218,8 @@ class ModLoader(QMainWindow):
         super().__init__()
         self.ui = Window()
         self.ui.setupUi(self)
+
+        self.config = LoaderConfig()
 
         QExecMainThread.init(self)
 
@@ -173,20 +232,51 @@ class ModLoader(QMainWindow):
         self.header = HeaderFrame(githubMethod=lambda: webbrowser.open(f"{GITHUB}/{REPO}"),
                                   supportMethod=lambda: webbrowser.open(SUPPORT_URL),
                                   infoMethod=self.showInformation)
+        self.header.ui.gamebananaButton.setText("GameBanana")
         self.mods = Mods(installMethod=self.installMod,
                          uninstallMethod=self.uninstallMod,
                          reinstallMethod=self.reinstallMod,
                          deleteMethod=self.deleteMod,
                          reloadMethod=self.reloadMods,
-                         openFolderMethod=self.openModsFolder)
+                         openFolderMethod=self.openModsFolder,
+                         uninstallAllMethod=self.uninstallAllMods,
+                         toggleFavoriteMethod=self.toggleFavorite,
+                         sortCallback=self.updateSortState)
+
         self.progressDialog = ProgressDialog(self)
         self.buttonsDialog = ButtonsDialog(self)
         self.acceptDialog = AcceptDialog(self)
+        
+        # Temporary WIP flag for GameBanana browser
+        GAMEBANANA_WIP = True
+        
+        if GAMEBANANA_WIP:
+            self.gamebanana = WIPFrame("GameBanana Browser")
+        else:
+            self.gamebanana = GameBananaFrame(modsPath=self.modsPath)
+            self.gamebanana.downloadMod.connect(self.handleGameBananaDownload, Qt.QueuedConnection)
+
+        self.settings = SettingsFrame(
+            saveCallback=self.syncSettingsWithCore,
+            openCacheMethod=self.openCacheFolder,
+            clearCacheMethod=self.clearCache,
+            bhPath=core.worker.brawlhalla.BRAWLHALLA_PATH or "Not found",
+            modsPath=self.modsPath,
+            cacheSize=format_size(get_dir_size(core.MODLOADER_CACHE_PATH))
+        )
+        self.bulkOperationCount = 0
+        self.currentSortField = "Name"
+        self.currentSortReverse = False
+        self.reloadPending = False
 
         self.setLoadingScreen()
 
         # self.resize(QSize(977, 550))
-        self.setMinimumSize(QSize(850, 550))
+        self.setMinimumSize(QSize(910, 550))
+
+        self.header.setModsButtonPressed(lambda: self.checkUnsavedSettings(self.setModsScreen))
+        self.header.setGamebananaButtonPressed(lambda: self.checkUnsavedSettings(self.setGamebananaScreen))
+        self.header.setSettingsButtonPressed(self.setSettingsScreen)
 
         threading.Thread(target=self.checkNewVersion).start()
 
@@ -220,7 +310,14 @@ class ModLoader(QMainWindow):
 
         self.controller = core.Controller()
         self.controller.setModsPath(self.modsPath)
-        self.controller.reloadMods()
+        
+        # Sync custom brawlhalla path to core
+        if self.config.brawlhallaPath:
+            core.worker.config.ModloaderCoreConfig.customBrawlhallaPath = self.config.brawlhallaPath
+            core.worker.config.ModloaderCoreConfig.save()
+            
+        if self.controller and hasattr(self.controller, 'reloadMods'):
+            self.controller.reloadMods()
         self.controller.getModsData()
         self.controller.installBaseMod(f"{PROGRAM_NAME}: {VERSION}")
 
@@ -228,10 +325,19 @@ class ModLoader(QMainWindow):
         if self.controller is None:
             return
 
-        data = self.controller.getData()
-        if data is None:
-            return
+        # Process up to 100 messages per tick to avoid overwhelming the UI
+        processed = 0
+        while self.controller.ready_to_receive and processed < 100:
+            try:
+                data = self.controller.getData()
+                if data is None:
+                    break
+                self._processControllerData(data)
+                processed += 1
+            except Exception:
+                break
 
+    def _processControllerData(self, data):
         cmd = data[0]
 
         if cmd == Environment.Notification:
@@ -267,7 +373,7 @@ class ModLoader(QMainWindow):
 
                     else:
                         content += f"\n- UNKNOWN MOD: {modConflictHash}"
-                        print("ERROR Один из установленных модов не найден в модлодере!")
+                        print("ERROR: One of the installed mods was not found in the ModLoader!")
 
                 self.acceptDialog.setContent(content)
                 self.acceptDialog.setAccept(lambda: [self.acceptDialog.hide(), self.controller.installMod(modHash)])
@@ -301,10 +407,23 @@ class ModLoader(QMainWindow):
                 modHash = notification.args[0]
                 modClass = self.mods.mods[modHash]
                 modClass.installed = True
-                self.mods.updateData()
-                self.mods.selectedModButton.updateData()
-                self.progressDialog.hide()
-
+                
+                # Update specific mod button UI
+                for btn in self.mods.modsButtons:
+                    if btn.modClass.hash == modHash:
+                        btn.updateData()
+                        break
+                
+                # Update main view if it's the selected one
+                if self.mods.selectedModButton and self.mods.selectedModButton.modClass.hash == modHash:
+                    self.mods.updateData()
+                
+                if self.bulkOperationCount > 0:
+                    self.bulkOperationCount -= 1
+                    
+                if self.bulkOperationCount <= 0:
+                    self.progressDialog.hide()
+                    
                 self.showErrorNotifications()
 
             # Uninstalling
@@ -327,10 +446,23 @@ class ModLoader(QMainWindow):
                 modHash = notification.args[0]
                 modClass = self.mods.mods[modHash]
                 modClass.installed = False
-                self.mods.updateData()
-                self.mods.selectedModButton.updateData()
+                
+                # Update specific mod button UI
+                for btn in self.mods.modsButtons:
+                    if btn.modClass.hash == modHash:
+                        btn.updateData()
+                        break
+                
+                # Update main view if it's the selected one
+                if self.mods.selectedModButton and self.mods.selectedModButton.modClass.hash == modHash:
+                    self.mods.updateData()
 
-                self.progressDialog.hide()
+                if self.bulkOperationCount > 0:
+                    self.bulkOperationCount -= 1
+                    
+                if self.bulkOperationCount <= 0:
+                    self.progressDialog.hide()
+                    
                 self.showErrorNotifications()
 
             elif ntype in [NotificationType.CompileModSourcesSpriteHasNoSymbolclass,  # Compiler
@@ -351,6 +483,9 @@ class ModLoader(QMainWindow):
                            NotificationType.UninstallingModSwfElementNotFound]:
                 self.errors.append(notification)
 
+            elif ntype == NotificationType.FatalError:
+                self.showError("Fatal Error:", notification.args[0])
+
         elif cmd == Environment.ReloadMods:
             self.mods.removeAllMods()
 
@@ -367,8 +502,11 @@ class ModLoader(QMainWindow):
                                  platform=modData.get("platform", ""),
                                  installed=modData.get("installed", False),
                                  currentVersion=modData.get("currentVersion", False),
-                                 modFileExist=modData.get("modFileExist", False))
+                                 modFileExist=modData.get("modFileExist", False),
+                                 date=modData.get("date", 0.0),
+                                 favorite=modData.get("hash", "") in self.config.favorites)
 
+            self.mods.applySort(self.currentSortField, self.currentSortReverse)
             self.setModsScreen()
             self.showErrorNotifications()
 
@@ -482,15 +620,22 @@ class ModLoader(QMainWindow):
         if terminate:
             action = TerminateApp
 
-        self.buttonsDialog.setContent(content)
-        self.buttonsDialog.setButtons([("Copy error", lambda: self.copyToClipboard(f"{title}\n\n{content}")),
+        # If it's a long traceback, show a shorter summary and keep the full one for the button
+        display_content = content
+        if "Traceback (most recent call last):" in content:
+            lines = content.strip().split("\n")
+            # Extract the last few lines (the actual error)
+            display_content = "An unexpected error occurred during the operation.\n\n" + "\n".join(lines[-2:])
+
+        self.buttonsDialog.setContent(display_content)
+        self.buttonsDialog.setButtons([("Copy Error", lambda: self.copyToClipboard(f"{title}\n\n{content}")),
                                        ("Ok", action)])
         self.buttonsDialog.show()
 
     def copyToClipboard(self, text):
         cb = QApplication.clipboard()
-        cb.clear(mode=cb.Clipboard)
-        cb.setText(text, mode=cb.Clipboard)
+        cb.clear(mode=QClipboard.Mode.Clipboard)
+        cb.setText(text, mode=QClipboard.Mode.Clipboard)
 
     def setLoadingScreen(self):
         ClearFrame(self.ui.mainFrame)
@@ -498,10 +643,158 @@ class ModLoader(QMainWindow):
         self.loading.setText("Loading mods sources...")
 
     def setModsScreen(self):
-        ClearFrame(self.ui.mainFrame)
+        self.header.ui.modsButton.setChecked(True)
+        self.header.ui.gamebananaButton.setChecked(False)
+        self.header.ui.settingsButton.setChecked(False)
+        self.header.ui.modsLine.show()
+        self.header.ui.gamebananaLine.hide()
+        self.header.ui.settingsLine.hide()
 
+        ClearFrame(self.ui.mainFrame)
         AddToFrame(self.ui.mainFrame, self.header)
         AddToFrame(self.ui.mainFrame, self.mods)
+        if self.reloadPending:
+            self.setLoadingScreen()
+            # Refresh the list of installed mods in the browser
+            if hasattr(self, 'gamebanana'):
+                self.gamebanana.update_installed_mods(self.getInstalledModNames())
+            self.reloadMods()
+            self.reloadPending = False
+
+    def setGamebananaScreen(self):
+        self.header.ui.modsButton.setChecked(False)
+        self.header.ui.gamebananaButton.setChecked(True)
+        self.header.ui.settingsButton.setChecked(False)
+        self.header.ui.modsLine.hide()
+        self.header.ui.gamebananaLine.show()
+        self.header.ui.settingsLine.hide()
+
+        ClearFrame(self.ui.mainFrame)
+        AddToFrame(self.ui.mainFrame, self.header)
+        AddToFrame(self.ui.mainFrame, self.gamebanana)
+
+    def setSettingsScreen(self):
+        self.header.ui.modsButton.setChecked(False)
+        self.header.ui.gamebananaButton.setChecked(False)
+        self.header.ui.settingsButton.setChecked(True)
+        self.header.ui.modsLine.hide()
+        self.header.ui.gamebananaLine.hide()
+        self.header.ui.settingsLine.show()
+
+        ClearFrame(self.ui.mainFrame)
+        AddToFrame(self.ui.mainFrame, self.header)
+        AddToFrame(self.ui.mainFrame, self.settings)
+
+    def checkUnsavedSettings(self, nextScreenMethod):
+        if self.settings.hasUnsavedChanges:
+            self.acceptDialog.setTitle("Unsaved Changes")
+            self.acceptDialog.setContent("Save the settings before changing tab!")
+            self.acceptDialog.ui.accept.setText("Save")
+            self.acceptDialog.ui.cancel.setText("Discard")
+            
+            def saveAndContinue():
+                self.settings.saveSettings()
+                self.acceptDialog.hide()
+                nextScreenMethod()
+            
+            def discardAndContinue():
+                self.settings.hasUnsavedChanges = False
+                self.acceptDialog.hide()
+                nextScreenMethod()
+                
+            self.acceptDialog.setAccept(saveAndContinue)
+            self.acceptDialog.setCancel(discardAndContinue)
+            self.acceptDialog.show()
+        else:
+            nextScreenMethod()
+
+    def syncSettingsWithCore(self):
+        # Update paths if they changed
+        if self.config.modsPath:
+            self.modsPath = self.config.modsPath
+        elif os.path.exists(self._local_mods):
+            self.modsPath = self._local_mods
+        else:
+            self.modsPath = os.path.join(core.MODLOADER_CACHE_PATH, "Mods")
+
+        if self.controller:
+            self.controller.setModsPath(self.modsPath)
+            
+            if self.config.brawlhallaPath:
+                core.worker.config.ModloaderCoreConfig.customBrawlhallaPath = self.config.brawlhallaPath
+                core.worker.config.ModloaderCoreConfig.save()
+
+    def openCacheFolder(self):
+        os.startfile(core.MODLOADER_CACHE_PATH)
+
+    def uninstallAllMods(self):
+        installed_mods = [btn for btn in self.mods.modsButtons if btn.modClass.installed]
+        if not installed_mods:
+            return
+            
+        self.acceptDialog.setTitle("Uninstall All")
+        self.acceptDialog.setContent(f"Are you sure you want to uninstall all {len(installed_mods)} installed mods?")
+        self.acceptDialog.ui.accept.setText("Uninstall All")
+        self.acceptDialog.ui.cancel.setText("Cancel")
+        self.acceptDialog.setAccept(lambda: self._doUninstallAll(installed_mods))
+        self.acceptDialog.show()
+
+    def _doUninstallAll(self, mods_to_uninstall):
+        self.acceptDialog.hide()
+        self.bulkOperationCount = len(mods_to_uninstall)
+        for modButton in mods_to_uninstall:
+            self.uninstallMod(modButton)
+
+    def clearCache(self):
+        self.acceptDialog.setTitle("Clear Cache")
+        self.acceptDialog.setContent(
+            "Clearing the cache may cause problems, especially if you already have mods installed.\n\n"
+            "It is recommended to uninstall mods first before clearing the cache.\n\n"
+            "The application will CLOSE after clearing the cache. You must reopen it manually.\n\n"
+            "Are you sure you want to clear the cache?"
+        )
+        self.acceptDialog.ui.accept.setText("Clear")
+        self.acceptDialog.ui.cancel.setText("Cancel")
+        self.acceptDialog.setAccept(self._doClearCache)
+        self.acceptDialog.setCancel(self.acceptDialog.hide)
+        self.acceptDialog.show()
+
+    def _doClearCache(self):
+        import shutil
+        try:
+            # Delete everything inside MODLOADER_CACHE_PATH except core.*, config_*, files.json, and association files
+            for filename in os.listdir(core.MODLOADER_CACHE_PATH):
+                file_path = os.path.join(core.MODLOADER_CACHE_PATH, filename)
+                try:
+                    # Protection list
+                    if any([
+                        filename.startswith("core."),
+                        filename.startswith("config_"),
+                        filename == "files.json",
+                        filename.endswith(".ico"),
+                        filename.endswith(".png"),
+                        filename.endswith(".reg")
+                    ]):
+                        continue
+                        
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                except Exception as e:
+                    print(f'Failed to delete {file_path}. Reason: {e}')
+            
+            # Recreate necessary folders
+            os.makedirs(os.path.join(core.MODLOADER_CACHE_PATH, "OriginalFiles"), exist_ok=True)
+            
+            self.buttonsDialog.setTitle("Cache Cleared")
+            self.buttonsDialog.setContent("The application cache has been cleared. The app will now close.")
+            self.buttonsDialog.setButtons([("Ok", TerminateApp)])
+            self.buttonsDialog.show()
+        except Exception as e:
+            self.showError("Error clearing cache", str(e))
+        finally:
+            self.acceptDialog.hide()
 
     def showInformation(self):
         self.buttonsDialog.setTitle("About")
@@ -514,6 +807,7 @@ class ModLoader(QMainWindow):
                                       ["Homepage:", f"<url=\"{GITHUB}/{REPO}\">{GITHUB}/{REPO}</url>"],
                                       [None, f"<url=\"{GAMEBANANA}\">{GAMEBANANA}</url>"],
                                       ["Author:", "I_FabrizioG_I"],
+                                      ["Maintainers:", "LordShadow505 & Bucccket"],
                                       ["Contacts:", "Discord: I_FabrizioG_I#8111"],
                                       [None, "VK: vk/fabriziog"]], newLine=False)
 
@@ -523,12 +817,30 @@ class ModLoader(QMainWindow):
 
     def installMod(self):
         if self.mods.selectedModButton is not None:
+            if self.bulkOperationCount <= 0:
+                self.bulkOperationCount = 1
             modClass = self.mods.selectedModButton.modClass
             self.controller.getModConflict(modClass.hash)
 
-    def uninstallMod(self):
-        if self.mods.selectedModButton is not None:
-            modClass = self.mods.selectedModButton.modClass
+    def toggleFavorite(self, modHash):
+        favorites = self.config.favorites.copy()
+        if modHash in favorites:
+            favorites.remove(modHash)
+        else:
+            favorites.append(modHash)
+        self.config.favorites = favorites
+        
+        # Trigger re-sort using CURRENT sort settings
+        self.mods.applySort(self.currentSortField, self.currentSortReverse)
+
+    def uninstallMod(self, modButton=None):
+        if modButton is None or isinstance(modButton, bool):
+            modButton = self.mods.selectedModButton
+            if self.bulkOperationCount <= 0:
+                self.bulkOperationCount = 1
+            
+        if modButton is not None:
+            modClass = modButton.modClass
             self.controller.uninstallMod(modClass.hash)
 
     def reinstallMod(self):
@@ -554,11 +866,36 @@ class ModLoader(QMainWindow):
 
             self.buttonsDialog.show()
 
+    def getInstalledModNames(self):
+        names = []
+        try:
+            # Current UI names
+            for i in range(self.mods.ui.modsLayout.count()):
+                item = self.mods.ui.modsLayout.itemAt(i)
+                if item and item.widget():
+                    w = item.widget()
+                    if hasattr(w, 'modClass'):
+                        names.append(w.modClass.name)
+            
+            # Plus files/folders in mods folder (for immediate feedback before reload)
+            if os.path.exists(self.modsPath):
+                for item in os.listdir(self.modsPath):
+                    # Remove extensions for better matching with GB names
+                    base = os.path.splitext(item)[0]
+                    names.append(base)
+                    names.append(item)
+        except: pass
+        return list(set(names))
+
     def reloadMods(self):
         self.setLoadingScreen()
-        #self.mods.removeAllMods()
-        self.controller.reloadMods()
-        self.controller.getModsData()
+        if self.controller:
+            self.controller.reloadMods()
+            self.controller.getModsData()
+
+    def updateSortState(self, field, reverse):
+        self.currentSortField = field
+        self.currentSortReverse = reverse
 
     def openModsFolder(self):
         os.startfile(self.modsPath)
@@ -630,13 +967,89 @@ class ModLoader(QMainWindow):
         except:
             pass
 
+    _dlProgress = Signal(int, str)
+    _dlDone = Signal(str)
+    _dlError = Signal(str)
+
+    def handleGameBananaDownload(self, url, filename):
+        print(f"[DL DEBUG] handleGameBananaDownload: {url} | {filename}")
+        if url.startswith("bmod://"):
+            self.urlImport(url, reload=False)
+            self.reloadPending = True
+            return
+
+        self.progressDialog.setTitle(f"Downloading {filename}...")
+        self.progressDialog.setContent("Connecting...")
+        self.progressDialog.setValue(0)
+        self.progressDialog.setMaximum(100)
+        self.progressDialog.show()
+
+        # Connect signals once (guard against double-connect)
+        try: self._dlProgress.disconnect()
+        except: pass
+        try: self._dlDone.disconnect()
+        except: pass
+        try: self._dlError.disconnect()
+        except: pass
+
+        self._dlProgress.connect(lambda p, s: (self.progressDialog.setValue(p), self.progressDialog.setContent(s)))
+        self._dlDone.connect(lambda path: (
+            self.progressDialog.hide(), 
+            self.fileImport(path, reload=False), 
+            setattr(self, "reloadPending", True),
+            self.gamebanana.update_installed_mods(self.getInstalledModNames())
+        ))
+        self._dlError.connect(lambda msg: (self.progressDialog.hide(), self.showError("Download Error", msg)))
+
+        def download():
+            try:
+                print(f"[GB DL] Starting download: {url}")
+                response = requests.get(url, stream=True, headers={"User-Agent": "BModLoader/1.0"}, timeout=15)
+                response.raise_for_status()
+                total_size = int(response.headers.get('content-length', 0))
+                
+                # Check if it's a bmod:// URL or direct URL
+                if url.startswith("bmod://"):
+                    # For bmod:// we expect the existing pipeline to handle it
+                    # But if we are here, it might be a direct link from a file row
+                    pass
+                
+                temp_path = os.path.join(os.getenv("TEMP"), filename)
+                downloaded = 0
+                with open(temp_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                p = int((downloaded / total_size) * 100)
+                                self._dlProgress.emit(p, f"Downloaded {format_size(downloaded)} / {format_size(total_size)}")
+                print(f"[GB DL] Successfully downloaded to {temp_path}")
+                self._dlDone.emit(temp_path)
+            except Exception as e:
+                print(f"[GB DL] Error occurred: {e}")
+                # Fallback to manual download to Downloads folder
+                try:
+                    downloads_path = os.path.join(os.path.expanduser("~"), "Downloads", filename)
+                    print(f"[GB DL] Fallback: Downloading to {downloads_path}")
+                    response = requests.get(url, stream=True, headers={"User-Agent": "BModLoader/1.0"})
+                    with open(downloads_path, "wb") as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk: f.write(chunk)
+                    self._dlError.emit(f"Automatic import failed, but mod was saved to your Downloads folder: {filename}")
+                    os.startfile(os.path.join(os.path.expanduser("~"), "Downloads"))
+                except Exception as e2:
+                    self._dlError.emit(f"Download failed: {str(e)}\n\nFallback error: {str(e2)}")
+
+        threading.Thread(target=download, daemon=True).start()
+
     queueFileSignal = Signal()
 
     def queueFile(self):
         for file in self.importQueue.iterFile():
             self.fileImport(file)
 
-    def fileImport(self, filePath: str):
+    def fileImport(self, filePath: str, reload=True):
         self.setForeground()
 
         if os.path.abspath(filePath).startswith(os.path.abspath(self.modsPath)):
@@ -655,7 +1068,8 @@ class ModLoader(QMainWindow):
             with open(os.path.join(self.modsPath, fileName), "wb") as insideMod:
                 insideMod.write(outsideMod.read())
 
-        self.reloadMods()
+        if reload:
+            self.reloadMods()
 
     queueUrlSignal = Signal()
 
@@ -663,15 +1077,16 @@ class ModLoader(QMainWindow):
         for url in self.importQueue.iterUrl():
             self.urlImport(url)
 
-    def urlImport(self, url: str):
+    def urlImport(self, url: str, reload=True):
+        print(f"[DL DEBUG] urlImport: {url}")
         self.setForeground()
 
         data = url.split(":", 1)[1].strip("/")
-        splitData = data.split(",")
+        splitData = [p for p in data.split(",") if p.strip()]  # strip empty trailing parts
 
-        if len(splitData) == 3:
-            tag, modId, dlId = data.split(",")
-            zipUrl = f"http://gamebanana.com/dl/{dlId}"
+        if len(splitData) >= 3:
+            tag, modId, dlId = splitData[0], splitData[1], splitData[2]
+            zipUrl = f"https://gamebanana.com/dl/{dlId}"
         else:
             zipUrl = ""
             return
@@ -684,46 +1099,155 @@ class ModLoader(QMainWindow):
         self.progressDialog.show()
         QApplication.processEvents()
         try:
+            # GameBanana requires a User-Agent header, otherwise it returns HTTP 403 Forbidden.
+            opener = urllib.request.build_opener()
+            opener.addheaders = [('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36')]
+            urllib.request.install_opener(opener)
+            
             urllib.request.urlretrieve(zipUrl, archivePath, self.handleUpdateApp)
 
             with open(archivePath, "rb") as file:
                 _signature = file.read(3)
 
+            print(f"[DL DEBUG] Archive signature: {_signature}")
+            bmod_found = False
+
             if _signature.startswith(b"7z"):
                 with py7zr.SevenZipFile(archivePath) as mod7z:
-                    for file in mod7z.getnames():
+                    names = mod7z.getnames()
+                    print(f"[DL DEBUG] Files in 7z: {names}")
+                    for file in names:
                         if file.endswith(f".{core.MOD_FILE_FORMAT}"):
-                            self.progressDialog.setContent(f"Extract: '{file}'")
+                            bmod_found = True
+                            target_fn = os.path.basename(file)
+                            print(f"[DL DEBUG] Extracting (flattened) from 7z: {file} -> {target_fn}")
+                            self.progressDialog.setContent(f"Extract: '{target_fn}'")
                             QApplication.processEvents()
+                            # Extract and move to root of modsPath
                             mod7z.extract(self.modsPath, [file])
+                            # If it was in a subfolder, move it
+                            if os.path.dirname(file):
+                                old_path = os.path.join(self.modsPath, file)
+                                new_path = os.path.join(self.modsPath, target_fn)
+                                if os.path.exists(old_path):
+                                    if os.path.exists(new_path): os.remove(new_path)
+                                    os.rename(old_path, new_path)
 
             elif _signature.startswith(b"Rar"):
                 with rarfile.RarFile(archivePath) as modRar:
-                    for file in modRar.namelist():
+                    names = modRar.namelist()
+                    print(f"[DL DEBUG] Files in Rar: {names}")
+                    for file in names:
                         if file.endswith(f".{core.MOD_FILE_FORMAT}"):
-                            self.progressDialog.setContent(f"Extract: '{file}'")
+                            bmod_found = True
+                            target_fn = os.path.basename(file)
+                            print(f"[DL DEBUG] Extracting (flattened) from Rar: {file} -> {target_fn}")
+                            self.progressDialog.setContent(f"Extract: '{target_fn}'")
                             QApplication.processEvents()
+                            
+                            # Extracting with rarfile can be tricky for flattening, 
+                            # easiest is to extract then move
                             modRar.extract(file, self.modsPath)
+                            if os.path.dirname(file):
+                                old_path = os.path.join(self.modsPath, file)
+                                new_path = os.path.join(self.modsPath, target_fn)
+                                if os.path.exists(old_path):
+                                    if os.path.exists(new_path): os.remove(new_path)
+                                    os.rename(old_path, new_path)
 
             elif _signature.startswith(b"PK"):
                 with zipfile.ZipFile(archivePath) as modZip:
-                    for file in modZip.namelist():
+                    names = modZip.namelist()
+                    print(f"[DL DEBUG] Files in Zip: {names}")
+                    for file in names:
                         if file.endswith(f".{core.MOD_FILE_FORMAT}"):
-                            self.progressDialog.setContent(f"Extract: '{file}'")
+                            bmod_found = True
+                            target_fn = os.path.basename(file)
+                            print(f"[DL DEBUG] Extracting (flattened) from Zip: {file} -> {target_fn}")
+                            self.progressDialog.setContent(f"Extract: '{target_fn}'")
                             QApplication.processEvents()
+                            
+                            # Extract and move
                             modZip.extract(file, self.modsPath)
+                            if os.path.dirname(file):
+                                old_path = os.path.join(self.modsPath, file)
+                                new_path = os.path.join(self.modsPath, target_fn)
+                                if os.path.exists(old_path):
+                                    if os.path.exists(new_path): os.remove(new_path)
+                                    os.rename(old_path, new_path)
 
-            self.reloadMods()
+            if not bmod_found:
+                print(f"[DL DEBUG] NO .bmod FOUND IN ARCHIVE!")
+                self.showError("Incompatible Mod Format", 
+                    "This mod does not contain a standard .bmod file or is packaged in a way that cannot be automatically installed.\n\n"
+                    "Please download it manually from the website and follow the installation instructions provided by the author.")
+                return False
+
+            if reload:
+                self.reloadMods()
+            else:
+                if hasattr(self, 'gamebanana'):
+                    self.gamebanana.update_installed_mods(self.getInstalledModNames())
+            # Mark as downloaded ONLY IF SUCCESSFUL
+            try:
+                parts = url.split(":", 1)[1].strip("/").split(",")
+                if len(parts) >= 2:
+                    mid = int(parts[1])
+                    if hasattr(self, 'gamebanana'):
+                        self.gamebanana.mark_mod_downloaded(mid)
+            except: pass
+
             self.progressDialog.hide()
+            return True
 
         except rarfile.RarCannotExec:
-            self.showError("Unpack error:", "WinRar 'unrar.exe' not found")
+            self.showError("Unpack error:", "WinRar 'unrar.exe' not found. Please install WinRar or add its installation folder to your Windows PATH to support .rar mod files.")
+            return False
 
-        except:
-            self.showError("Unpack error:", "".join(traceback.format_exception(*sys.exc_info())))
+        except Exception as e:
+            # Fallback to manual download if automatic import fails
+            print(f"[DL DEBUG] Error in urlImport: {e}")
+            try:
+                downloads_path = os.path.join(os.path.expanduser("~"), "Downloads", f"mod_{dlId}.zip")
+                urllib.request.urlretrieve(zipUrl, downloads_path)
+                self.showError("Automatic Import Failed", 
+                    f"The automatic installation failed, but we've downloaded the mod to your Downloads folder: mod_{dlId}.zip\n\nError: {str(e)}")
+                os.startfile(os.path.join(os.path.expanduser("~"), "Downloads"))
+            except:
+                self.showError("Operation failed:", "".join(traceback.format_exception(*sys.exc_info())))
 
         finally:
-            os.remove(archivePath)
+            self.progressDialog.hide()
+            if os.path.exists(archivePath):
+                try:
+                    os.remove(archivePath)
+                except:
+                    pass
+
+
+
+class WIPFrame(QFrame):
+    def __init__(self, title):
+        super().__init__()
+        self.setStyleSheet("background-color: #242529;")
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignCenter)
+        
+        label = QLabel(f"{title} is currently under construction")
+        font = QFont("Roboto", 20)
+        font.setBold(True)
+        label.setFont(font)
+        label.setStyleSheet("color: #7E57C2;")
+        layout.addWidget(label)
+        
+        sublabel = QLabel("WIP")
+        sublabel.setFont(QFont("Roboto", 14))
+        sublabel.setStyleSheet("color: #aaaaaa;")
+        sublabel.setAlignment(Qt.AlignCenter)
+        layout.addWidget(sublabel)
+
+    def update_installed_mods(self, mods):
+        pass
 
 
 # pyrcc5 -o ui/ui_sources/icons_rc.py ui/ui_sources/icons.qrc
@@ -735,7 +1259,7 @@ class ModLoader(QMainWindow):
 def RunApp():
     app = QApplication(sys.argv)
 
-    font_db = QFontDatabase()
+    font_db = QFontDatabase
     font_db.addApplicationFont(":/fonts/resources/fonts/Exo 2/Exo2-SemiBold.ttf")
     font_db.addApplicationFont(":/fonts/resources/fonts/Roboto/Roboto-Black.ttf")
     font_db.addApplicationFont(":/fonts/resources/fonts/Roboto/Roboto-BlackItalic.ttf")

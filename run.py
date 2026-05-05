@@ -327,7 +327,7 @@ if __name__ == "__main__" and "--multiprocessing-fork" not in sys.argv:
         dataSize = 0
         mlclient.send(Commands.JUST_OPEN + dataSize.to_bytes(2, byteorder='big'))
         mlclient.close()
-    except (ConnectionRefusedError, socket.timeout):
+    except (ConnectionRefusedError, TimeoutError, socket.timeout, OSError):
         mlclient.close()
 
         mlserver = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

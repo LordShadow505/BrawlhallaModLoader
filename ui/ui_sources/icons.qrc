@@ -34,6 +34,15 @@
     <file>resources/icons/Update.png</file>
     <file>resources/icons/UpdateAllMods.png</file>
     <file>resources/icons/UpdateModsTable.png</file>
+    <file>resources/icons/Star.png</file>
+    <file>resources/icons/Star_Fill.png</file>
+    <file>resources/icons/GB_DateAdded.png</file>
+    <file>resources/icons/GB_Downloads.png</file>
+    <file>resources/icons/GB_Likes.png</file>
+    <file>resources/icons/GB_Updated.png</file>
+    <file>resources/icons/GB_Views.png</file>
+    <file>resources/icons/Website.png</file>
+    <file>resources/icons/DownloadMod.png</file>
   </qresource>
   <qresource prefix="fonts">
     <file>resources/fonts/Exo 2/Exo2-SemiBold.ttf</file>

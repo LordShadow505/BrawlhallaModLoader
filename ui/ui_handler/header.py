@@ -60,7 +60,7 @@ class HeaderButton(ButtonGroup):
             self.animMinus.setDuration(self.duration)
             self.animMinus.setStartValue(default)
             self.animMinus.setEndValue(0)
-            self.animMinus.setEasingCurve(self.easingCurve)
+            self.animMinus.setEasingCurve(QEasingCurve.OutCubic)
             self.animMinus.start()
 
     def released(self):

@@ -1,8 +1,8 @@
 from typing import List, Dict
 
-from PySide6.QtWidgets import QWidget, QPushButton, QVBoxLayout, QFrame, QLabel
+from PySide6.QtWidgets import QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QLabel
 from PySide6.QtGui import QPixmap, QPaintEvent, QIcon, QCursor
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, QTimer
 
 from .modbutton import ModButton
 from .modclass import ModClass
@@ -77,11 +77,22 @@ class Mods(QWidget):
     mods: Dict[str, ModClass] = {}
     modsButtons: List[ModButton] = []
 
-    def __init__(self, installMethod, uninstallMethod, reinstallMethod, deleteMethod, reloadMethod, openFolderMethod):
+    def __init__(self, installMethod, uninstallMethod, reinstallMethod, deleteMethod, reloadMethod, openFolderMethod, uninstallAllMethod, toggleFavoriteMethod, sortCallback):
         super().__init__()
 
         self.ui = Ui_Mods()
         self.ui.setupUi(self)
+        self.toggleFavoriteMethod = toggleFavoriteMethod
+        self.sortCallback = sortCallback
+
+        self.setStyleSheet("""
+            QToolTip {
+                background-color: #242529;
+                color: #ffffff;
+                border: 1px solid #404146;
+                padding: 4px;
+            }
+        """)
 
         self.preview = None
         self.previews: List[QPixmap] = []
@@ -98,6 +109,24 @@ class Mods(QWidget):
 
         self.body.leftPreview.clicked.connect(self.leftPreview)
         self.body.rightPreview.clicked.connect(self.rightPreview)
+
+        # Warning Notice
+        self.warningFrame = QFrame()
+        self.warningFrame.setStyleSheet("background-color: #1D1E20; border-bottom: 1px solid #333333;")
+        warningLayout = QHBoxLayout(self.warningFrame)
+        warningLayout.setContentsMargins(10, 5, 10, 5)
+        warningLayout.setSpacing(10)
+
+        warningIconLabel = QLabel()
+        warningIconLabel.setPixmap(QIcon(":/icons/resources/icons/Warning.png").pixmap(16, 16))
+        warningLayout.addWidget(warningIconLabel)
+
+        warningTextLabel = QLabel("Remember that any existing skin mod requires a PAID skin, check the REQUIREMENTS section in GameBanana to find out which skin it replaces.")
+        warningTextLabel.setWordWrap(True)
+        warningTextLabel.setStyleSheet("color: #FF5252; font-size: 10px; font-weight: bold; border: none;")
+        warningLayout.addWidget(warningTextLabel, 1)
+
+        self.ui.verticalLayout.insertWidget(0, self.warningFrame)
 
         modsListFrame = QFrame()
         layout = QVBoxLayout(modsListFrame)
@@ -130,12 +159,33 @@ class Mods(QWidget):
         self.modsActions.uninstall.clicked.connect(uninstallMethod)
         self.modsActions.reinstall.clicked.connect(reinstallMethod)
         self.modsActions.deleteMod.clicked.connect(deleteMethod)
+        self.modsActions.deleteMod.setIcon(QIcon(":/icons/resources/icons/Delete.png"))
+        
         self.ui.reloadModsList.clicked.connect(reloadMethod)
         self.ui.openModsFolderButton.clicked.connect(openFolderMethod)
+        
+        # New Uninstall All Button
+        self.ui.uninstallAllMods = QPushButton(self.ui.leftButtons)
+        self.ui.uninstallAllMods.setMinimumSize(QSize(30, 30))
+        self.ui.uninstallAllMods.setCursor(Qt.PointingHandCursor)
+        self.ui.uninstallAllMods.setIcon(QIcon(":/icons/resources/icons/UninstallAllMods.png"))
+        self.ui.uninstallAllMods.setToolTip("Uninstall all mods from game")
+        self.ui.horizontalLayout_4.insertWidget(2, self.ui.uninstallAllMods)
+        self.ui.uninstallAllMods.clicked.connect(uninstallAllMethod)
+        
+        self.ui.deleteAllMods.setIcon(QIcon(":/icons/resources/icons/Delete.png"))
+        self.ui.deleteAllMods.setToolTip("Delete all mods from list")
+        
+        # Sort Dropdown
+        self.ui.modsSortButton.clicked.connect(self.showSortMenu)
+        self.ui.updateAllMods.clicked.connect(lambda: None)  # Functionality removed as requested
 
         self.ui.searchArea.textChanged.connect(self.searchEvent)
 
         AddToFrame(self.body.modActions, actionsWidget)
+
+        self.nameSortReverse = False
+        self.dateSortReverse = True
 
         self.setPreviewsPaths([self.defaultPreview])
 
@@ -322,7 +372,8 @@ class Mods(QWidget):
 
     def addModButton(self, modClass: ModClass):
         modButton = ModButton(modClass=modClass,
-                              method=self.selectMod)
+                              method=self.selectMod,
+                              favoriteMethod=self.toggleFavoriteMethod)
 
         self.modsButtons.append(modButton)
         AddToFrame(self.modsList, modButton)
@@ -342,7 +393,9 @@ class Mods(QWidget):
                platform: str,
                installed: bool,
                currentVersion: bool,
-               modFileExist: bool):
+               modFileExist: bool,
+               date: float = 0.0,
+               favorite: bool = False):
 
         for path in previewsPaths:
             self.cachePreview(path)
@@ -358,7 +411,9 @@ class Mods(QWidget):
                        platform,
                        installed,
                        currentVersion,
-                       modFileExist)
+                       modFileExist,
+                       date,
+                       favorite)
 
         self.mods[hash] = mod
         self.addModButton(mod)
@@ -368,10 +423,86 @@ class Mods(QWidget):
 
         self.selectedModButton = None
         for modButton in self.modsButtons:
-            modButton.__del__()
-            del modButton
+            modButton.cleanup()
         self.modsButtons.clear()
+
+        # Clear global preview cache to free up RAM
+        SetPreview.cachedPreviews.clear()
 
         for modClass in self.mods.values():
             del modClass
         self.mods.clear()
+
+    def showSortMenu(self):
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QAction
+        
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #242529;
+                color: #ffffff;
+                border: 1px solid #404146;
+            }
+            QMenu::item:selected {
+                background-color: #42A5F5;
+                color: #ffffff;
+            }
+        """)
+        
+        az_action = QAction("A-Z", self)
+        az_action.triggered.connect(lambda: self.applySort("Name", False))
+        
+        za_action = QAction("Z-A", self)
+        za_action.triggered.connect(lambda: self.applySort("Name", True))
+        
+        newest_action = QAction("Newest to Oldest", self)
+        newest_action.triggered.connect(lambda: self.applySort("Date", True))
+        
+        oldest_action = QAction("Oldest to Newest", self)
+        oldest_action.triggered.connect(lambda: self.applySort("Date", False))
+        
+        menu.addAction(az_action)
+        menu.addAction(za_action)
+        menu.addSeparator()
+        menu.addAction(newest_action)
+        menu.addAction(oldest_action)
+        
+        menu.exec(QCursor.pos())
+
+    def applySort(self, field, reverse):
+        if self.sortCallback:
+            self.sortCallback(field, reverse)
+            
+        # Save scroll position
+        scroll_bar = self.ui.scrollModsList.verticalScrollBar()
+        scroll_pos = scroll_bar.value()
+
+        # Split favorites and others
+        favorites = [b for b in self.modsButtons if b.modClass.favorite]
+        others = [b for b in self.modsButtons if not b.modClass.favorite]
+        
+        if field == "Name":
+            favorites.sort(key=lambda x: x.modClass.name.lower(), reverse=reverse)
+            others.sort(key=lambda x: x.modClass.name.lower(), reverse=reverse)
+        elif field == "Date":
+            favorites.sort(key=lambda x: float(x.modClass.date or 0), reverse=reverse)
+            others.sort(key=lambda x: float(x.modClass.date or 0), reverse=reverse)
+
+        # Merge them: favorites always first
+        self.modsButtons = favorites + others
+
+        # Re-order in the layout
+        for modButton in self.modsButtons:
+            self.modsList.layout().removeWidget(modButton)
+            modButton.setParent(None)
+
+        for modButton in self.modsButtons:
+            AddToFrame(self.modsList, modButton)
+        
+        # Restore scroll position after layout updates
+        QTimer.singleShot(0, lambda: scroll_bar.setValue(scroll_pos))
+
+        # Keep selection visible if any
+        if self.selectedModButton:
+            self.selectedModButton.select()
