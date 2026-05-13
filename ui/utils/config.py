@@ -15,7 +15,8 @@ class LoaderConfig:
         self.defaults = {
             "brawlhallaPath": "",
             "modsPath": "",
-            "favorites": []
+            "favorites": [],
+            "showListPreviews": True
         }
         
         if os.path.exists(self.config_path):
@@ -69,4 +70,13 @@ class LoaderConfig:
     @favorites.setter
     def favorites(self, value):
         self.data["favorites"] = value
+        self._save()
+
+    @property
+    def showListPreviews(self):
+        return self.data.get("showListPreviews", self.defaults["showListPreviews"])
+
+    @showListPreviews.setter
+    def showListPreviews(self, value):
+        self.data["showListPreviews"] = value
         self._save()

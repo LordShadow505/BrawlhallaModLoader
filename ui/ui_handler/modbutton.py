@@ -30,14 +30,33 @@ class ModButton(QWidget):
         self.favoriteButton.setStyleSheet("background-color: transparent; border: none;")
         self.favoriteButton.clicked.connect(self.toggleFavorite)
         
-        # Insert at the beginning of the horizontal layout inside the background frame
+        # Preview Container (Fixed width to avoid shifting status icons)
+        from PySide6.QtWidgets import QFrame
+        self.previewContainer = QFrame()
+        self.previewContainer.setFixedWidth(74) # 64px + 10px margin
+        self.previewContainer.setStyleSheet("background-color: transparent; border: none;")
+        previewLayout = QHBoxLayout(self.previewContainer)
+        previewLayout.setContentsMargins(0, 0, 10, 0) # 10px spacing after preview
+        previewLayout.setSpacing(0)
+
+        # List Preview Image
+        from PySide6.QtWidgets import QLabel
+        self.listPreviewLabel = QLabel()
+        self.listPreviewLabel.setFixedSize(QSize(64, 36))
+        self.listPreviewLabel.setAlignment(Qt.AlignCenter)
+        self.listPreviewLabel.setStyleSheet("background-color: #000; border-radius: 4px; border: 1px solid #222;")
+        previewLayout.addWidget(self.listPreviewLabel)
+        
+        # Insert into layout
         self.ui.horizontalLayout_2.insertWidget(0, self.favoriteButton)
-        self.ui.horizontalLayout_2.insertSpacing(1, 10) # Margin between star and text
+        self.ui.horizontalLayout_2.insertSpacing(1, 6) # Margin between star and preview container
+        self.ui.horizontalLayout_2.insertWidget(2, self.previewContainer)
         
         # Increase right margin to prevent status icon from being cut off
         self.ui.horizontalLayout_2.setContentsMargins(7, 0, 15, 0)
 
         self.updateData()
+        self.updateListPreview()
 
         self.ui.background.installEventFilter(self)
 
@@ -73,6 +92,30 @@ class ModButton(QWidget):
         if self.favoriteMethod:
             self.favoriteMethod(self.modClass.hash)
 
+    # Global cache for thumbnails to prevent UI freezing
+    _thumbCache = {}
+
+    def updateListPreview(self):
+        from ..utils.config import LoaderConfig
+        if LoaderConfig().showListPreviews:
+            self.previewContainer.show()
+            
+            path = ":/images/resources/images/DefaultPreview.png"
+            if self.modClass.previewsPaths and len(self.modClass.previewsPaths) > 0:
+                p = self.modClass.previewsPaths[0]
+                if p and p != "None":
+                    path = p
+                    
+            path = path.replace("\\", "/")
+            if path not in self._thumbCache:
+                original_pixmap = QPixmap(path)
+                # Scale with KeepAspectRatio so it fits in 64x36, then QLabel centers it over black bg
+                self._thumbCache[path] = original_pixmap.scaled(64, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            
+            self.listPreviewLabel.setPixmap(self._thumbCache[path])
+        else:
+            self.previewContainer.hide()
+
     def onParentResize(self):
         parent = self
         while True:
@@ -85,14 +128,25 @@ class ModButton(QWidget):
 
         versionWidth = self.ui.gameVersion.fontMetrics().boundingRect(self.ui.gameVersion.text()).width()
 
-        elided = self.ui.modName.fontMetrics().elidedText(self.modClass.name,
-                                                          Qt.ElideRight, parent.width() - 60 - versionWidth)
-        self.ui.modName.setText(elided)
-        self.ui.modName.setMaximumWidth(parent.width() - 100)
+        # Calculate current offset caused by margins, star, spacing, and status icon
+        base_offset = 80 
+        
+        preview_offset = 0
+        if hasattr(self, 'previewContainer') and not self.previewContainer.isHidden():
+            preview_offset = self.previewContainer.width() + 6 # Container (74) + Spacing (6)
 
-        elided = self.ui.modAuthor.fontMetrics().elidedText(f"Author: {self.modClass.author}",
-                                                            Qt.ElideRight, parent.width() - 50)
-        self.ui.modAuthor.setText(elided)
+        total_offset = base_offset + versionWidth + preview_offset
+
+        elided = self.ui.modName.fontMetrics().elidedText(self.modClass.name,
+                                                           Qt.ElideRight, parent.width() - total_offset)
+        self.ui.modName.setText(elided)
+        self.ui.modName.setMaximumWidth(parent.width() - total_offset)
+
+        author_offset = base_offset + preview_offset
+        elided_author = self.ui.modAuthor.fontMetrics().elidedText(f"Author: {self.modClass.author}",
+                                                            Qt.ElideRight, parent.width() - author_offset)
+        self.ui.modAuthor.setText(elided_author)
+        self.ui.modAuthor.setMaximumWidth(parent.width() - author_offset)
 
     def select(self):
         if self.pressed:

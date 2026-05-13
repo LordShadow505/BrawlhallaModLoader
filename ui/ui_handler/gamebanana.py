@@ -117,7 +117,7 @@ class ModCard(QFrame):
         self.setCursor(Qt.PointingHandCursor); self.setFixedSize(195, 330)
         self.setStyleSheet("""
             ModCard { background: #1D1E20; border: 1px solid #333; border-radius: 10px; }
-            ModCard:hover { background: #242529; border: 1px solid #F9A825; }
+            ModCard:hover { background: #151518; border: 1px solid #F9A825; }
             ModCard QLabel { background: transparent; }
         """)
         col = QVBoxLayout(self); col.setContentsMargins(10,10,10,10); col.setSpacing(5)
@@ -336,7 +336,7 @@ class GameBananaFrame(QFrame):
     def __init__(self, modsPath=None, parent=None):
         super().__init__(parent)
         self._net = Net(self); self.modsPath = modsPath; self.installed_mod_names = []
-        self.setStyleSheet("background:#242529;")
+        self.setStyleSheet("background:#151518;")
         self._page=1; self._sid=None; self._loading=False; self._nomore=False; self._path=[]; self._cards=[]
 
         root = QHBoxLayout(self); root.setContentsMargins(0,0,0,0); root.setSpacing(0)

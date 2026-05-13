@@ -43,6 +43,8 @@
     <file>resources/icons/GB_Views.png</file>
     <file>resources/icons/Website.png</file>
     <file>resources/icons/DownloadMod.png</file>
+    <file>resources/icons/Preview.png</file>
+    <file>resources/icons/PreviewActive.png</file>
   </qresource>
   <qresource prefix="fonts">
     <file>resources/fonts/Exo 2/Exo2-SemiBold.ttf</file>

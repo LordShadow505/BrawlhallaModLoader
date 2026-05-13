@@ -17,34 +17,20 @@ import encodings.idna
 
 from typing import List
 
-# ── Development bootstrap ─────────────────────────────────────────────────────
-# In dev, resolve `import core` to the shared BhModLoaderCore-main package.
-# This file is excluded from production .spec builds — packaged apps use the
-# local core/ folder bundled by PyInstaller.
-try:
-    _bootstrap_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dev_bootstrap.py")
-    if os.path.exists(_bootstrap_path):
-        import importlib.util as _ilu
-        _spec = _ilu.spec_from_file_location("dev_bootstrap", _bootstrap_path)
-        _mod = _ilu.module_from_spec(_spec)
-        _spec.loader.exec_module(_mod)
-except Exception as _e:
-    print(f"[dev_bootstrap] skipped: {_e}")
-# ─────────────────────────────────────────────────────────────────────────────
 
+core = None
 try:
     import core
     from core import NotificationType, Notification, Environment, CORE_VERSION
 
-    import core.ffdec
-
     JAVA_FOUND = True
-except ImportError as e:
+except Exception as e:
     NotificationType = Notification = Environment = CORE_VERSION = None
     JAVA_FOUND = False
 
-    if e.msg != "Java not found!":
-        print(f"Error importing core: {e}")
+    CORE_IMPORT_ERROR = f"{type(e).__name__}: {str(e)}"
+    print(f"Error importing core: {CORE_IMPORT_ERROR}")
+    traceback.print_exc()
 from PySide6.QtCore import QSize, QTranslator, QLocale, QTimer, Signal, Qt
 from PySide6.QtGui import QIcon, QFontDatabase, QFont, QClipboard
 from PySide6.QtWidgets import QMainWindow, QApplication, QFrame, QVBoxLayout, QLabel
@@ -219,6 +205,9 @@ class ModLoader(QMainWindow):
         self.ui = Window()
         self.ui.setupUi(self)
 
+        # Enable drag & drop on the main window
+        self.setAcceptDrops(True)
+
         self.config = LoaderConfig()
 
         QExecMainThread.init(self)
@@ -297,9 +286,12 @@ class ModLoader(QMainWindow):
             self.controllerGetterTimer.timeout.connect(self.controllerHandler)
             self.controllerGetterTimer.start(10)
         else:
-            message = ("Java not found!\n\nPlease Install <u><b>The Windows Offline (64-bit)</b></u> Version:\n"
-                       "<url=\"https://www.java.com/en/download/windows_manual.jsp\">"
-                       "https://www.java.com/en/download/windows_manual.jsp</url>")
+            if CORE_IMPORT_ERROR and "Java not found!" not in CORE_IMPORT_ERROR:
+                message = f"Error importing core:\n\n{CORE_IMPORT_ERROR}\n\nPlease check your installation."
+            else:
+                message = ("Java not found!\n\nPlease Install <u><b>The Windows Offline (64-bit)</b></u> Version:\n"
+                           "<url=\"https://www.java.com/en/download/windows_manual.jsp\">"
+                           "https://www.java.com/en/download/windows_manual.jsp</url>")
             self.showError("Fatal Error:", TextFormatter.format(message, 11), terminate=True)
 
         InitWindowClose()
@@ -424,6 +416,9 @@ class ModLoader(QMainWindow):
                 if self.bulkOperationCount <= 0:
                     self.progressDialog.hide()
                     
+                if self.currentSortField == "Installed":
+                    self.mods.applySort(self.currentSortField, self.currentSortReverse)
+                    
                 self.showErrorNotifications()
 
             # Uninstalling
@@ -463,6 +458,9 @@ class ModLoader(QMainWindow):
                 if self.bulkOperationCount <= 0:
                     self.progressDialog.hide()
                     
+                if self.currentSortField == "Installed":
+                    self.mods.applySort(self.currentSortField, self.currentSortReverse)
+                    
                 self.showErrorNotifications()
 
             elif ntype in [NotificationType.CompileModSourcesSpriteHasNoSymbolclass,  # Compiler
@@ -471,6 +469,8 @@ class ModLoader(QMainWindow):
                            NotificationType.CompileModSourcesUnsupportedCategory,
                            NotificationType.CompileModSourcesUnknownFile,
                            NotificationType.CompileModSourcesSaveError,
+                           NotificationType.CompileModSourcesDefectivePiece,
+                           NotificationType.CompileModSourcesGeneralError,
                            NotificationType.LoadingModIsEmpty,  # Loader
                            NotificationType.InstallingModNotFoundFileElement,  # Installer
                            NotificationType.InstallingModNotFoundGameSwf,
@@ -482,6 +482,8 @@ class ModLoader(QMainWindow):
                            NotificationType.UninstallingModSwfOriginalElementNotFound,  # Uninstaller
                            NotificationType.UninstallingModSwfElementNotFound]:
                 self.errors.append(notification)
+                if ntype in [NotificationType.CompileModSourcesDefectivePiece, NotificationType.CompileModSourcesGeneralError]:
+                    self.showErrorNotifications()
 
             elif ntype == NotificationType.FatalError:
                 self.showError("Fatal Error:", notification.args[0])
@@ -589,6 +591,17 @@ class ModLoader(QMainWindow):
                 elif ntype == NotificationType.UninstallingModSwfElementNotFound:
                     string = f"Not found mod element '{notif.args[1]}' in '{notif.args[2]}'"
 
+                elif ntype == NotificationType.CompileModSourcesDefectivePiece:
+                    sprite = notif.args[1]
+                    element_id = notif.args[2]
+                    string = (f"There is a defective piece in the mod, please delete it and try again.\n\n"
+                             f"The defective piece is: {sprite} (Element ID: {element_id})")
+
+                elif ntype == NotificationType.CompileModSourcesGeneralError:
+                    error_msg = notif.args[1]
+                    # traceback_str = notif.args[2]
+                    string = f"An error occurred during compilation: {error_msg}"
+
                 if string:
                     errors.append(string)
                 else:
@@ -631,6 +644,21 @@ class ModLoader(QMainWindow):
         self.buttonsDialog.setButtons([("Copy Error", lambda: self.copyToClipboard(f"{title}\n\n{content}")),
                                        ("Ok", action)])
         self.buttonsDialog.show()
+
+    def checkGameRunning(self):
+        try:
+            # Try multiple process names to be sure
+            for proc_name in ["Brawlhalla.exe", "Brawlhalla64.exe"]:
+                output = subprocess.check_output(f'tasklist /FI "IMAGENAME eq {proc_name}" /NH', 
+                                                 shell=True, 
+                                                 creationflags=subprocess.CREATE_NO_WINDOW).decode(errors='ignore').lower()
+                if proc_name.lower() in output:
+                    self.showError("Game is running!", 
+                                   "Brawlhalla is currently running. Please close the game before installing or uninstalling mods.")
+                    return True
+        except Exception as e:
+            print(f"[DEBUG] checkGameRunning error: {e}")
+        return False
 
     def copyToClipboard(self, text):
         cb = QApplication.clipboard()
@@ -728,6 +756,9 @@ class ModLoader(QMainWindow):
         os.startfile(core.MODLOADER_CACHE_PATH)
 
     def uninstallAllMods(self):
+        if self.checkGameRunning():
+            return
+            
         installed_mods = [btn for btn in self.mods.modsButtons if btn.modClass.installed]
         if not installed_mods:
             return
@@ -808,14 +839,16 @@ class ModLoader(QMainWindow):
                                       [None, f"<url=\"{GAMEBANANA}\">{GAMEBANANA}</url>"],
                                       ["Author:", "I_FabrizioG_I"],
                                       ["Maintainers:", "LordShadow505 & Bucccket"],
-                                      ["Contacts:", "Discord: I_FabrizioG_I#8111"],
-                                      [None, "VK: vk/fabriziog"]], newLine=False)
+                                      ["Modhalla Discord:", f"<url=\"https://discord.gg/ctzYZxBHgY\">https://discord.gg/ctzYZxBHgY</url>"]], newLine=False)
 
         self.buttonsDialog.setContent(TextFormatter.format(string, 11))
         self.buttonsDialog.setButtons([("Ok", self.buttonsDialog.hide)])
         self.buttonsDialog.show()
 
     def installMod(self):
+        if self.checkGameRunning():
+            return
+            
         if self.mods.selectedModButton is not None:
             if self.bulkOperationCount <= 0:
                 self.bulkOperationCount = 1
@@ -834,6 +867,9 @@ class ModLoader(QMainWindow):
         self.mods.applySort(self.currentSortField, self.currentSortReverse)
 
     def uninstallMod(self, modButton=None):
+        if self.checkGameRunning():
+            return
+            
         if modButton is None or isinstance(modButton, bool):
             modButton = self.mods.selectedModButton
             if self.bulkOperationCount <= 0:
@@ -844,6 +880,9 @@ class ModLoader(QMainWindow):
             self.controller.uninstallMod(modClass.hash)
 
     def reinstallMod(self):
+        if self.checkGameRunning():
+            return
+            
         if self.mods.selectedModButton is not None:
             modClass = self.mods.selectedModButton.modClass
             self.controller.uninstallMod(modClass.hash)
@@ -972,7 +1011,7 @@ class ModLoader(QMainWindow):
     _dlError = Signal(str)
 
     def handleGameBananaDownload(self, url, filename):
-        print(f"[DL DEBUG] handleGameBananaDownload: {url} | {filename}")
+
         if url.startswith("bmod://"):
             self.urlImport(url, reload=False)
             self.reloadPending = True
@@ -1050,26 +1089,96 @@ class ModLoader(QMainWindow):
             self.fileImport(file)
 
     def fileImport(self, filePath: str, reload=True):
+        """Import a .bmod file, a .zip containing .bmod files, or a mod folder."""
         self.setForeground()
 
+        filePath = os.path.normpath(filePath)
+
+        # ── If it's a folder, treat it as a mod source folder ──────────────────
+        if os.path.isdir(filePath):
+            dest = os.path.join(self.modsPath, os.path.basename(filePath))
+            if os.path.abspath(filePath) == os.path.abspath(dest):
+                return  # already inside mods folder
+            import shutil
+            if os.path.exists(dest):
+                shutil.rmtree(dest)
+            shutil.copytree(filePath, dest)
+            if reload:
+                self.reloadMods()
+            return
+
+        # ── Skip if already inside mods folder ────────────────────────────────
         if os.path.abspath(filePath).startswith(os.path.abspath(self.modsPath)):
             return
 
-        fileName = os.path.split(filePath)[1]
-        fileNameSplit = os.path.splitext(fileName)
+        fileName = os.path.basename(filePath)
+        ext = os.path.splitext(fileName)[1].lower()
 
-        if os.path.exists(os.path.join(self.modsPath, fileName)):
-            i = 1
-            while os.path.exists(os.path.join(self.modsPath, f"{fileNameSplit[0]} ({i}){fileNameSplit[1]}")):
-                i += 1
-            fileName = f"{fileNameSplit[0]} ({i}){fileNameSplit[1]}"
+        # ── .bmod — copy directly ─────────────────────────────────────────────
+        if ext == f".{core.MOD_FILE_FORMAT}":
+            fileNameSplit = os.path.splitext(fileName)
+            destName = fileName
+            if os.path.exists(os.path.join(self.modsPath, destName)):
+                i = 1
+                while os.path.exists(os.path.join(self.modsPath, f"{fileNameSplit[0]} ({i}){fileNameSplit[1]}")):
+                    i += 1
+                destName = f"{fileNameSplit[0]} ({i}){fileNameSplit[1]}"
+            with open(filePath, "rb") as src:
+                with open(os.path.join(self.modsPath, destName), "wb") as dst:
+                    dst.write(src.read())
 
-        with open(filePath, "rb") as outsideMod:
-            with open(os.path.join(self.modsPath, fileName), "wb") as insideMod:
-                insideMod.write(outsideMod.read())
+        # ── .zip — extract .bmod files inside ────────────────────────────────
+        elif ext == ".zip":
+            bmod_found = False
+            try:
+                with zipfile.ZipFile(filePath) as z:
+                    for name in z.namelist():
+                        if name.endswith(f".{core.MOD_FILE_FORMAT}"):
+                            bmod_found = True
+                            target_fn = os.path.basename(name)
+                            data = z.read(name)
+                            dest_path = os.path.join(self.modsPath, target_fn)
+                            if os.path.exists(dest_path):
+                                fn, fe = os.path.splitext(target_fn)
+                                i = 1
+                                while os.path.exists(os.path.join(self.modsPath, f"{fn} ({i}){fe}")):
+                                    i += 1
+                                dest_path = os.path.join(self.modsPath, f"{fn} ({i}){fe}")
+                            with open(dest_path, "wb") as out:
+                                out.write(data)
+            except Exception as e:
+                self.showError("ZIP Error", f"Could not open ZIP file:\n{e}")
+                return
+            if not bmod_found:
+                self.showError("No .bmod found", f"The ZIP '{fileName}' does not contain any .bmod files.")
+                return
+        else:
+            # Unsupported extension — silently skip
+            return
 
         if reload:
             self.reloadMods()
+
+    # ── Drag & Drop ──────────────────────────────────────────────────────────
+    def dragEnterEvent(self, event):
+        mime = event.mimeData()
+        if mime.hasUrls():
+            # Accept if at least one url is a supported type
+            for url in mime.urls():
+                path = url.toLocalFile()
+                ext = os.path.splitext(path)[1].lower()
+                if os.path.isdir(path) or ext in (f".{core.MOD_FILE_FORMAT}", ".zip"):
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def dropEvent(self, event):
+        paths = [url.toLocalFile() for url in event.mimeData().urls()]
+        event.acceptProposedAction()
+
+        # Import all at once, reload once at the end
+        for i, path in enumerate(paths):
+            self.fileImport(path, reload=(i == len(paths) - 1))
 
     queueUrlSignal = Signal()
 
@@ -1078,7 +1187,7 @@ class ModLoader(QMainWindow):
             self.urlImport(url)
 
     def urlImport(self, url: str, reload=True):
-        print(f"[DL DEBUG] urlImport: {url}")
+
         self.setForeground()
 
         data = url.split(":", 1)[1].strip("/")
@@ -1109,18 +1218,18 @@ class ModLoader(QMainWindow):
             with open(archivePath, "rb") as file:
                 _signature = file.read(3)
 
-            print(f"[DL DEBUG] Archive signature: {_signature}")
+
             bmod_found = False
 
             if _signature.startswith(b"7z"):
                 with py7zr.SevenZipFile(archivePath) as mod7z:
                     names = mod7z.getnames()
-                    print(f"[DL DEBUG] Files in 7z: {names}")
+
                     for file in names:
                         if file.endswith(f".{core.MOD_FILE_FORMAT}"):
                             bmod_found = True
                             target_fn = os.path.basename(file)
-                            print(f"[DL DEBUG] Extracting (flattened) from 7z: {file} -> {target_fn}")
+
                             self.progressDialog.setContent(f"Extract: '{target_fn}'")
                             QApplication.processEvents()
                             # Extract and move to root of modsPath
@@ -1136,12 +1245,12 @@ class ModLoader(QMainWindow):
             elif _signature.startswith(b"Rar"):
                 with rarfile.RarFile(archivePath) as modRar:
                     names = modRar.namelist()
-                    print(f"[DL DEBUG] Files in Rar: {names}")
+
                     for file in names:
                         if file.endswith(f".{core.MOD_FILE_FORMAT}"):
                             bmod_found = True
                             target_fn = os.path.basename(file)
-                            print(f"[DL DEBUG] Extracting (flattened) from Rar: {file} -> {target_fn}")
+
                             self.progressDialog.setContent(f"Extract: '{target_fn}'")
                             QApplication.processEvents()
                             
@@ -1158,12 +1267,12 @@ class ModLoader(QMainWindow):
             elif _signature.startswith(b"PK"):
                 with zipfile.ZipFile(archivePath) as modZip:
                     names = modZip.namelist()
-                    print(f"[DL DEBUG] Files in Zip: {names}")
+
                     for file in names:
                         if file.endswith(f".{core.MOD_FILE_FORMAT}"):
                             bmod_found = True
                             target_fn = os.path.basename(file)
-                            print(f"[DL DEBUG] Extracting (flattened) from Zip: {file} -> {target_fn}")
+
                             self.progressDialog.setContent(f"Extract: '{target_fn}'")
                             QApplication.processEvents()
                             
@@ -1177,7 +1286,7 @@ class ModLoader(QMainWindow):
                                     os.rename(old_path, new_path)
 
             if not bmod_found:
-                print(f"[DL DEBUG] NO .bmod FOUND IN ARCHIVE!")
+
                 self.showError("Incompatible Mod Format", 
                     "This mod does not contain a standard .bmod file or is packaged in a way that cannot be automatically installed.\n\n"
                     "Please download it manually from the website and follow the installation instructions provided by the author.")
@@ -1206,7 +1315,7 @@ class ModLoader(QMainWindow):
 
         except Exception as e:
             # Fallback to manual download if automatic import fails
-            print(f"[DL DEBUG] Error in urlImport: {e}")
+
             try:
                 downloads_path = os.path.join(os.path.expanduser("~"), "Downloads", f"mod_{dlId}.zip")
                 urllib.request.urlretrieve(zipUrl, downloads_path)
@@ -1229,7 +1338,7 @@ class ModLoader(QMainWindow):
 class WIPFrame(QFrame):
     def __init__(self, title):
         super().__init__()
-        self.setStyleSheet("background-color: #242529;")
+        self.setStyleSheet("background-color: #151518;")
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignCenter)
         

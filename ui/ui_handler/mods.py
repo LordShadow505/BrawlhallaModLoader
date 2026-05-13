@@ -87,7 +87,7 @@ class Mods(QWidget):
 
         self.setStyleSheet("""
             QToolTip {
-                background-color: #242529;
+                background-color: #151518;
                 color: #ffffff;
                 border: 1px solid #404146;
                 padding: 4px;
@@ -133,7 +133,8 @@ class Mods(QWidget):
         layout.setSpacing(0)
         layout.setContentsMargins(2, 5, 2, 5)
         self.modsList = QFrame()
-        self.modsList.setMaximumWidth(self.ui.modsList.maximumWidth())
+        self.ui.modsList.setMaximumWidth(528)
+        self.modsList.setMaximumWidth(528)
         layout2 = QVBoxLayout(self.modsList)
         layout2.setSpacing(1)
         layout2.setContentsMargins(0, 0, 0, 0)
@@ -176,9 +177,19 @@ class Mods(QWidget):
         self.ui.deleteAllMods.setIcon(QIcon(":/icons/resources/icons/Delete.png"))
         self.ui.deleteAllMods.setToolTip("Delete all mods from list")
         
+        from ..utils.config import LoaderConfig
+        
+        # Bottom left buttons Tooltips
+        self.ui.modsSortButton.setToolTip("Sort Mods")
+        self.ui.openModsFolderButton.setToolTip("Open Mods Folder")
+        
         # Sort Dropdown
         self.ui.modsSortButton.clicked.connect(self.showSortMenu)
-        self.ui.updateAllMods.clicked.connect(lambda: None)  # Functionality removed as requested
+        
+        # Toggle Previews Button
+        self.ui.updateAllMods.setToolTip("Toggle List Previews")
+        self.ui.updateAllMods.clicked.connect(self.toggleListPreviews)
+        self.updateListPreviewsIcon()
 
         self.ui.searchArea.textChanged.connect(self.searchEvent)
 
@@ -221,11 +232,23 @@ class Mods(QWidget):
         for modButton in displayModButtons:
             modButton.restore(self.modsList)
 
+    def toggleListPreviews(self):
+        from ..utils.config import LoaderConfig
+        config = LoaderConfig()
+        config.showListPreviews = not config.showListPreviews
+        self.updateListPreviewsIcon()
+        
+        # Update all visible mod buttons to show/hide the preview
+        for modButton in self.modsButtons:
+            modButton.updateListPreview()
+            modButton.onParentResize()
 
-
-        #for modButton in self.modsButtons:
-        #    print(modButton.modClass.name)
-        #print(text)
+    def updateListPreviewsIcon(self):
+        from ..utils.config import LoaderConfig
+        if LoaderConfig().showListPreviews:
+            self.ui.updateAllMods.setIcon(QIcon(":/icons/resources/icons/PreviewActive.png"))
+        else:
+            self.ui.updateAllMods.setIcon(QIcon(":/icons/resources/icons/Preview.png"))
 
     def onResize(self, *a):
         width = self.ui.scrollBody.width() - (7 if self.ui.scrollBody.verticalScrollBar().isVisible() else 0)
@@ -440,7 +463,7 @@ class Mods(QWidget):
         menu = QMenu(self)
         menu.setStyleSheet("""
             QMenu {
-                background-color: #242529;
+                background-color: #151518;
                 color: #ffffff;
                 border: 1px solid #404146;
             }
@@ -462,11 +485,20 @@ class Mods(QWidget):
         oldest_action = QAction("Oldest to Newest", self)
         oldest_action.triggered.connect(lambda: self.applySort("Date", False))
         
+        installed_action = QAction("Installed First", self)
+        installed_action.triggered.connect(lambda: self.applySort("Installed", False))
+        
+        author_action = QAction("Author", self)
+        author_action.triggered.connect(lambda: self.applySort("Author", False))
+        
         menu.addAction(az_action)
         menu.addAction(za_action)
         menu.addSeparator()
         menu.addAction(newest_action)
         menu.addAction(oldest_action)
+        menu.addSeparator()
+        menu.addAction(installed_action)
+        menu.addAction(author_action)
         
         menu.exec(QCursor.pos())
 
@@ -488,6 +520,13 @@ class Mods(QWidget):
         elif field == "Date":
             favorites.sort(key=lambda x: float(x.modClass.date or 0), reverse=reverse)
             others.sort(key=lambda x: float(x.modClass.date or 0), reverse=reverse)
+        elif field == "Installed":
+            # Primary sort by installed status (True first), secondary by name (A-Z)
+            favorites.sort(key=lambda x: (not x.modClass.installed, x.modClass.name.lower()))
+            others.sort(key=lambda x: (not x.modClass.installed, x.modClass.name.lower()))
+        elif field == "Author":
+            favorites.sort(key=lambda x: (x.modClass.author.lower(), x.modClass.name.lower()), reverse=reverse)
+            others.sort(key=lambda x: (x.modClass.author.lower(), x.modClass.name.lower()), reverse=reverse)
 
         # Merge them: favorites always first
         self.modsButtons = favorites + others
