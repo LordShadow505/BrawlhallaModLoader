@@ -191,10 +191,9 @@ class ModLoader(QMainWindow):
     config = LoaderConfig()
     if config.modsPath:
         modsPath = config.modsPath
-    elif os.path.exists(_local_mods):
-        modsPath = _local_mods
     else:
-        modsPath = os.path.join(core.MODLOADER_CACHE_PATH, "Mods")
+        modsPath = _local_mods
+        os.makedirs(modsPath, exist_ok=True)
 
     errors: List[Notification] = []
 
@@ -311,7 +310,6 @@ class ModLoader(QMainWindow):
         if self.controller and hasattr(self.controller, 'reloadMods'):
             self.controller.reloadMods()
         self.controller.getModsData()
-        self.controller.installBaseMod(f"{PROGRAM_NAME}: {VERSION}")
 
     def controllerHandler(self):
         if self.controller is None:
@@ -470,6 +468,7 @@ class ModLoader(QMainWindow):
                            NotificationType.CompileModSourcesUnknownFile,
                            NotificationType.CompileModSourcesSaveError,
                            NotificationType.CompileModSourcesDefectivePiece,
+                           NotificationType.CompileModSourcesDuplicateSpriteId,
                            NotificationType.CompileModSourcesGeneralError,
                            NotificationType.LoadingModIsEmpty,  # Loader
                            NotificationType.InstallingModNotFoundFileElement,  # Installer
@@ -482,7 +481,7 @@ class ModLoader(QMainWindow):
                            NotificationType.UninstallingModSwfOriginalElementNotFound,  # Uninstaller
                            NotificationType.UninstallingModSwfElementNotFound]:
                 self.errors.append(notification)
-                if ntype in [NotificationType.CompileModSourcesDefectivePiece, NotificationType.CompileModSourcesGeneralError]:
+                if ntype in [NotificationType.CompileModSourcesDefectivePiece, NotificationType.CompileModSourcesDuplicateSpriteId, NotificationType.CompileModSourcesGeneralError]:
                     self.showErrorNotifications()
 
             elif ntype == NotificationType.FatalError:
@@ -542,9 +541,6 @@ class ModLoader(QMainWindow):
         elif cmd == Environment.SetModsPath:
             pass
 
-        elif cmd == Environment.InstallBaseMod:
-            self.loading.setText("Installing base mod...")
-
         else:
             print(f"Controller <- {str(data)}\n", end="")
 
@@ -596,6 +592,15 @@ class ModLoader(QMainWindow):
                     element_id = notif.args[2]
                     string = (f"There is a defective piece in the mod, please delete it and try again.\n\n"
                              f"The defective piece is: {sprite} (Element ID: {element_id})")
+
+                elif ntype == NotificationType.CompileModSourcesDuplicateSpriteId:
+                    sprite_id = notif.args[1]
+                    sprite1 = notif.args[2]
+                    sprite2 = notif.args[3]
+                    string = (f"There is a conflict because two sprites share the same ID number.\n\n"
+                              f"Duplicate ID: {sprite_id}\n"
+                              f"Found in: '{sprite1}' and '{sprite2}'\n"
+                              f"Please change the ID of one of them and try again.")
 
                 elif ntype == NotificationType.CompileModSourcesGeneralError:
                     error_msg = notif.args[1]
@@ -740,10 +745,9 @@ class ModLoader(QMainWindow):
         # Update paths if they changed
         if self.config.modsPath:
             self.modsPath = self.config.modsPath
-        elif os.path.exists(self._local_mods):
-            self.modsPath = self._local_mods
         else:
-            self.modsPath = os.path.join(core.MODLOADER_CACHE_PATH, "Mods")
+            self.modsPath = self._local_mods
+            os.makedirs(self.modsPath, exist_ok=True)
 
         if self.controller:
             self.controller.setModsPath(self.modsPath)
