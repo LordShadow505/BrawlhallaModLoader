@@ -38,13 +38,13 @@ client_exe = EXE(client_pyz,
 app_a = Analysis(['run.py'],
                  binaries=[],
                  datas=[],
-                 hiddenimports=[],
+                 hiddenimports=['core', 'core.worker', 'core.worker.brawlhalla', 'core.worker.config'],
                  hookspath=[],
                  runtime_hooks=[],
                  excludes=['tkinter', '_tkinter'],
                  win_no_prefer_redirects=False,
                  win_private_assemblies=False,
-                 noarchive=True)
+                 noarchive=False)
 app_a.datas += [('file_icon.ico','file_icon.ico','DATA'),
                 (os.path.split(client_exe.name)[1], client_exe.name, 'DATA'),
                 ('unrar.exe', 'libs\\unrar.exe', 'DATA')]

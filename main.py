@@ -244,13 +244,20 @@ class ModLoader(QMainWindow):
             self.gamebanana = GameBananaFrame(modsPath=self.modsPath)
             self.gamebanana.downloadMod.connect(self.handleGameBananaDownload, Qt.QueuedConnection)
 
+        bhPath = "Not found"
+        cacheSize = "0 B"
+        if core and hasattr(core, 'worker') and hasattr(core.worker, 'brawlhalla'):
+            bhPath = core.worker.brawlhalla.BRAWLHALLA_PATH or "Not found"
+        if core and hasattr(core, 'MODLOADER_CACHE_PATH'):
+            cacheSize = format_size(get_dir_size(core.MODLOADER_CACHE_PATH))
+
         self.settings = SettingsFrame(
             saveCallback=self.syncSettingsWithCore,
             openCacheMethod=self.openCacheFolder,
             clearCacheMethod=self.clearCache,
-            bhPath=core.worker.brawlhalla.BRAWLHALLA_PATH or "Not found",
+            bhPath=bhPath,
             modsPath=self.modsPath,
-            cacheSize=format_size(get_dir_size(core.MODLOADER_CACHE_PATH))
+            cacheSize=cacheSize
         )
         self.bulkOperationCount = 0
         self.currentSortField = "Name"
@@ -986,9 +993,19 @@ class ModLoader(QMainWindow):
         urllib.request.urlretrieve(fileUrl, filePath, self.handleUpdateApp)
         self.progressDialog.hide()
 
-        subprocess.Popen([os.environ["CLIENT_PATH"], "-update",
-                         os.path.abspath(sys.argv[0]),
-                         filePath])
+        clientPath = os.environ.get("CLIENT_PATH")
+        if not clientPath and core and hasattr(core, 'MODLOADER_CACHE_PATH'):
+            possibleClient = os.path.join(core.MODLOADER_CACHE_PATH, "ModLoaderClient.exe")
+            if os.path.exists(possibleClient):
+                clientPath = possibleClient
+
+        currentExe = os.path.abspath(sys.argv[0])
+        if clientPath and os.path.exists(clientPath):
+            subprocess.Popen([clientPath, "-update", currentExe, filePath])
+        else:
+            cmd = f'ping 127.0.0.1 -n 3 > NUL & move /y "{filePath}" "{currentExe}" & start "" "{currentExe}"'
+            subprocess.Popen(cmd, shell=True)
+
         QApplication.exit(0)
 
     def checkNewVersion(self):
