@@ -10,12 +10,13 @@ import multiprocessing
 ERROR = None
 try:
     import core
-except ImportError as e:
+except Exception as e:
     # Java not found error
     core = None
 
     # If other error
-    if e.msg != "Java not found!":
+    err_str = str(e).lower()
+    if not any(k in err_str for k in ["java not found", "_jpype", "jpype", "jvmnotfoundexception", "jvm"]):
         ERROR = sys.exc_info()
 
 from client import Arguments, Commands, CONFIG_FILE, CONFIG, SOCKET_PORT, MODLOADER_CLIENT
@@ -107,7 +108,7 @@ sys.excepthook = handle_exception
 threading.excepthook = lambda hook: handle_exception(hook.exc_type, hook.exc_value, hook.exc_traceback)
 
 if ERROR is not None:
-    sys.excepthook(ERROR)
+    sys.excepthook(*ERROR)
 
 
 def GetLocalPath():
