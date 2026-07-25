@@ -34,7 +34,7 @@ OUTPUT_PATH     = os.path.join(_SCRIPT_DIR, "splash.png")
 # ──────────────────────────────────────────────────────────────────────────────
 # Version (fallback used when running as plain script)
 # ──────────────────────────────────────────────────────────────────────────────
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 
 VERSION_TEXT_SIZE = 10   # pt
 VERSION_X         = 736  # px from left
