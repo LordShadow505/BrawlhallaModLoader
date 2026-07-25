@@ -1458,10 +1458,12 @@ class ModLoader(QMainWindow):
                         raise Exception(f"Could not extract RAR file. Please ensure WinRAR is installed.\nDetail: {rar_err}")
 
             elif _signature.startswith(b"PK"):
-                print("[urlImport] Extracting ZIP archive...")
+                print("[urlImport] Processing ZIP archive / .bmod file...")
                 with zipfile.ZipFile(archivePath) as modZip:
                     names = modZip.namelist()
                     print(f"[urlImport] Files inside ZIP: {names}")
+                    
+                    # 1. Search for explicit .bmod file inside ZIP
                     for file in names:
                         if file.endswith(f".{core.MOD_FILE_FORMAT}"):
                             bmod_found = True
@@ -1472,7 +1474,6 @@ class ModLoader(QMainWindow):
                             self.progressDialog.setContent(f"Extract: '{target_fn}'")
                             QApplication.processEvents()
                             
-                            # Extract and move
                             modZip.extract(file, self.modsPath)
                             if os.path.dirname(file):
                                 old_path = os.path.join(self.modsPath, file)
@@ -1480,6 +1481,26 @@ class ModLoader(QMainWindow):
                                 if os.path.exists(old_path):
                                     if os.path.exists(new_path): os.remove(new_path)
                                     os.rename(old_path, new_path)
+
+                    # 2. If no .bmod file inside, check if ZIP itself contains mod assets/metadata
+                    if not bmod_found:
+                        target_fn = f"mod_{modID}.{core.MOD_FILE_FORMAT}"
+                        target_path = os.path.join(self.modsPath, target_fn)
+                        import shutil
+                        shutil.copy2(archivePath, target_path)
+                        bmod_found = True
+                        extracted_bmod_filename = target_fn
+                        print(f"[urlImport] ZIP treated directly as .bmod file: '{target_fn}'")
+
+            # Fallback: if archive signature didn't match 7z, Rar, or PK, treat directly as .bmod file
+            if not bmod_found and os.path.exists(archivePath) and os.path.getsize(archivePath) > 0:
+                target_fn = f"mod_{modID}.{core.MOD_FILE_FORMAT}"
+                target_path = os.path.join(self.modsPath, target_fn)
+                import shutil
+                shutil.copy2(archivePath, target_path)
+                bmod_found = True
+                extracted_bmod_filename = target_fn
+                print(f"[urlImport] Unrecognized signature, treated directly as .bmod file: '{target_fn}'")
 
             if not bmod_found:
                 print("[urlImport WARNING] No .bmod file found in archive!")
@@ -1507,46 +1528,54 @@ class ModLoader(QMainWindow):
             return True
 
         except rarfile.RarCannotExec:
-            print("[urlImport ERROR] WinRar unrar.exe not found")
-            self.showError("Unpack error:", "WinRar 'unrar.exe' not found. Please install WinRar or add its installation folder to your Windows PATH to support .rar mod files.")
+            print("[urlImport ERROR] WinRAR unrar.exe not found")
+            self.progressDialog.hide()
+            if mid_val and hasattr(self, 'gamebanana'):
+                self.gamebanana.mark_mod_error(mid_val)
+            self.showError(
+                "Requirement Missing: WinRAR / UnRAR Tool Required",
+                "This mod is packaged inside a .RAR archive, but WinRAR ('unrar.exe') was not found on your system.\n\n"
+                "How to fix this issue:\n"
+                "1. Download and install WinRAR from https://www.win-rar.com/\n"
+                "2. Ensure WinRAR is installed to default path: 'C:\\Program Files\\WinRAR\\'\n"
+                "3. Restart Brawlhalla Mod Loader and try downloading again."
+            )
             return False
 
         except Exception as e:
             print(f"[urlImport ERROR] Automatic import failed: {e}")
             import traceback
             traceback.print_exc()
-            try:
-                downloads_path = os.path.join(os.path.expanduser("~"), "Downloads", f"mod_{dlId}.zip")
-                urllib.request.urlretrieve(zipUrl, downloads_path)
-                self.showError("Automatic Import Failed", 
-                    f"The automatic installation failed, but we've downloaded the mod to your Downloads folder: mod_{dlId}.zip\n\nError: {str(e)}")
-                os.startfile(os.path.join(os.path.expanduser("~"), "Downloads"))
-            except Exception as e2:
-                print(f"[urlImport ERROR] Manual download fallback also failed: {e2}")
-                self.showError("Operation failed:", "".join(traceback.format_exception(*sys.exc_info())))
-
             self.progressDialog.hide()
-            return True
 
-        except rarfile.RarCannotExec:
-            self.showError("Unpack error:", "WinRar 'unrar.exe' not found. Please install WinRar or add its installation folder to your Windows PATH to support .rar mod files.")
+            if mid_val and hasattr(self, 'gamebanana'):
+                self.gamebanana.mark_mod_error(mid_val)
+
+            err_msg = str(e)
+            if "unrar" in err_msg.lower() or "rar" in err_msg.lower() or "winrar" in err_msg.lower():
+                self.showError(
+                    "Requirement Missing: WinRAR / UnRAR Tool Required",
+                    "This mod is packaged inside a .RAR archive, but WinRAR ('unrar.exe') was not found on your system.\n\n"
+                    "How to fix this issue:\n"
+                    "1. Download and install WinRAR from https://www.win-rar.com/\n"
+                    "2. Ensure WinRAR is installed to default path: 'C:\\Program Files\\WinRAR\\'\n"
+                    "3. Restart Brawlhalla Mod Loader and try downloading again."
+                )
+            else:
+                self.showError(
+                    "Mod Download & Import Failed",
+                    f"An error occurred while downloading and extracting the mod:\n\n{err_msg}\n\n"
+                    "Troubleshooting Steps:\n"
+                    "1. Verify your internet connection.\n"
+                    "2. If downloading a .RAR file, install WinRAR (https://www.win-rar.com/).\n"
+                    "3. Check folder write permissions in your Mods directory."
+                )
+
             return False
-
-        except Exception as e:
-            # Fallback to manual download if automatic import fails
-
-            try:
-                downloads_path = os.path.join(os.path.expanduser("~"), "Downloads", f"mod_{dlId}.zip")
-                urllib.request.urlretrieve(zipUrl, downloads_path)
-                self.showError("Automatic Import Failed", 
-                    f"The automatic installation failed, but we've downloaded the mod to your Downloads folder: mod_{dlId}.zip\n\nError: {str(e)}")
-                os.startfile(os.path.join(os.path.expanduser("~"), "Downloads"))
-            except:
-                self.showError("Operation failed:", "".join(traceback.format_exception(*sys.exc_info())))
 
         finally:
             self.progressDialog.hide()
-            if os.path.exists(archivePath):
+            if 'archivePath' in locals() and os.path.exists(archivePath):
                 try:
                     os.remove(archivePath)
                 except:
