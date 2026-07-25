@@ -80,3 +80,12 @@ class LoaderConfig:
     def showListPreviews(self, value):
         self.data["showListPreviews"] = value
         self._save()
+
+    @property
+    def nsfwFilter(self):
+        return self.data.get("nsfwFilter", True)
+
+    @nsfwFilter.setter
+    def nsfwFilter(self, value):
+        self.data["nsfwFilter"] = value
+        self._save()

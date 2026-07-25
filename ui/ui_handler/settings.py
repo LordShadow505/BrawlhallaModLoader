@@ -122,6 +122,49 @@ class SettingsFrame(QFrame):
         self.card2.layout().addLayout(cacheButtonsLayout)
         self.mainLayout.addWidget(self.card2)
 
+        # ── Card 3: GameBanana ───────────────────────────────────
+        self.card3 = self._createCard("GameBanana Integration", "#F59E0B")
+        
+        # NSFW Filter Switch
+        nsfw_row = QHBoxLayout()
+        nsfw_row.setSpacing(12)
+        nsfw_lbl = QLabel("NSFW Content Filter:")
+        nsfw_lbl.setFixedWidth(160)
+        nsfw_lbl.setStyleSheet("color: #aaaaaa; font-size: 9pt;")
+        nsfw_row.addWidget(nsfw_lbl)
+        
+        from PySide6.QtWidgets import QCheckBox
+        self.nsfwCheckBox = QCheckBox("Enable NSFW Filter (Blur Sensitive Media)")
+        self.nsfwCheckBox.setChecked(self.config.nsfwFilter)
+        self.nsfwCheckBox.setStyleSheet("QCheckBox { color: #eeeeee; font-size: 9pt; font-weight: bold; } QCheckBox::indicator { width: 16px; height: 16px; }")
+        self.nsfwCheckBox.stateChanged.connect(lambda: setattr(self, 'hasUnsavedChanges', True))
+        nsfw_row.addWidget(self.nsfwCheckBox)
+        nsfw_row.addStretch()
+        self.card3.layout().addLayout(nsfw_row)
+        
+        # Clear GameBanana Cache Button
+        gb_cache_row = QHBoxLayout()
+        gb_cache_row.setSpacing(12)
+        gb_lbl = QLabel("GameBanana Image Cache:")
+        gb_lbl.setFixedWidth(160)
+        gb_lbl.setStyleSheet("color: #aaaaaa; font-size: 9pt;")
+        gb_cache_row.addWidget(gb_lbl)
+        
+        self.clearGbCacheBtn = QPushButton("Clear GameBanana Cache")
+        self.clearGbCacheBtn.setFixedSize(QSize(200, 34))
+        self.clearGbCacheBtn.setCursor(Qt.PointingHandCursor)
+        self.clearGbCacheBtn.setStyleSheet(self._getButtonStyle("#F59E0B"))
+        self.clearGbCacheBtn.clicked.connect(self._clear_gb_cache)
+        gb_cache_row.addWidget(self.clearGbCacheBtn)
+        
+        self.gbCacheStatusLbl = QLabel("")
+        self.gbCacheStatusLbl.setStyleSheet("color: #2ecc71; font-size: 9pt; font-weight: bold;")
+        gb_cache_row.addWidget(self.gbCacheStatusLbl)
+        gb_cache_row.addStretch()
+        
+        self.card3.layout().addLayout(gb_cache_row)
+        self.mainLayout.addWidget(self.card3)
+
         # ── Save button ───────────────────────────────────────────
         self.saveButton = QPushButton("Save Settings")
         self.saveButton.setFixedSize(QSize(180, 40))
@@ -129,6 +172,21 @@ class SettingsFrame(QFrame):
         self._setSaveButtonStyle(saved=False)
         self.saveButton.clicked.connect(self.saveSettings)
         self.mainLayout.addWidget(self.saveButton, alignment=Qt.AlignCenter)
+
+    def _clear_gb_cache(self):
+        try:
+            cache_dir = os.path.join(os.environ.get("APPDATA", ""), "BModLoader", "gb_cache")
+            count = 0
+            if os.path.exists(cache_dir):
+                import shutil
+                count = len(os.listdir(cache_dir))
+                shutil.rmtree(cache_dir, ignore_errors=True)
+                os.makedirs(cache_dir, exist_ok=True)
+            self.gbCacheStatusLbl.setText("Cache Cleared!")
+            print(f"[Settings] Cleared {count} items from GameBanana cache.")
+            QTimer.singleShot(2500, lambda: self.gbCacheStatusLbl.setText(""))
+        except Exception as e:
+            print(f"[Settings ERROR] Failed to clear GB cache: {e}")
 
     def _createCard(self, title: str, color: str) -> QFrame:
         card = QFrame()
@@ -286,6 +344,8 @@ class SettingsFrame(QFrame):
             self.config.modsPath = ""
         else:
             self.config.modsPath = m_path
+
+        self.config.nsfwFilter = self.nsfwCheckBox.isChecked()
 
         if self.saveCallback:
             self.saveCallback()

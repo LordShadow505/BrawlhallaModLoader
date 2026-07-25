@@ -4,3 +4,5 @@ PySide6
 psutil
 rarfile
 py7zr
+pybanana
+requests

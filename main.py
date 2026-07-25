@@ -15,6 +15,18 @@ import multiprocessing
 # (https://stackoverflow.com/questions/9144724/unknown-encoding-idna-in-python-requests)
 import encodings.idna
 
+# Auto-detect unrar.exe for RAR file extraction
+for _unrar in [
+    r"C:\Program Files\WinRAR\unrar.exe",
+    r"C:\Program Files (x86)\WinRAR\unrar.exe",
+    os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "WinRAR", "unrar.exe"),
+    os.path.join(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), "WinRAR", "unrar.exe"),
+]:
+    if os.path.exists(_unrar):
+        rarfile.UNRAR_TOOL = _unrar
+        print(f"[Main] Auto-configured rarfile UNRAR_TOOL: '{_unrar}'")
+        break
+
 from typing import List
 
 
@@ -223,7 +235,7 @@ class ModLoader(QMainWindow):
         self.header = HeaderFrame(githubMethod=lambda: webbrowser.open(f"{GITHUB}/{REPO}"),
                                   supportMethod=lambda: webbrowser.open(SUPPORT_URL),
                                   infoMethod=self.showInformation)
-        self.header.ui.gamebananaButton.setText("GameBanana")
+        self.header.ui.gamebananaButton.setText("GameBanana (Beta)")
         self.mods = Mods(installMethod=self.installMod,
                          uninstallMethod=self.uninstallMod,
                          reinstallMethod=self.reinstallMod,
@@ -239,7 +251,7 @@ class ModLoader(QMainWindow):
         self.acceptDialog = AcceptDialog(self)
         
         # Temporary WIP flag for GameBanana browser
-        GAMEBANANA_WIP = True
+        GAMEBANANA_WIP = False
         
         if GAMEBANANA_WIP:
             self.gamebanana = WIPFrame("GameBanana Browser")
@@ -1064,6 +1076,8 @@ class ModLoader(QMainWindow):
         if totalsize > 0:
             downloadPercentage = int(readedData * 100 / totalsize)
             self.progressDialog.setValue(downloadPercentage)
+            if hasattr(self, 'gamebanana'):
+                self.gamebanana.set_download_progress(downloadPercentage, f"Downloading... {downloadPercentage}%")
             QApplication.processEvents()
 
     def updateApp(self, fileUrl: str, version: str):
@@ -1126,7 +1140,7 @@ class ModLoader(QMainWindow):
         self.progressDialog.setContent("Connecting...")
         self.progressDialog.setValue(0)
         self.progressDialog.setMaximum(100)
-        self.progressDialog.show()
+        # Progress dialog omitted so downloads happen quietly in background bar
 
         # Connect signals once (guard against double-connect)
         try: self._dlProgress.disconnect()
@@ -1136,14 +1150,24 @@ class ModLoader(QMainWindow):
         try: self._dlError.disconnect()
         except: pass
 
-        self._dlProgress.connect(lambda p, s: (self.progressDialog.setValue(p), self.progressDialog.setContent(s)))
+        def _on_p(p, s):
+            self.progressDialog.setValue(p)
+            self.progressDialog.setContent(s)
+            if hasattr(self, 'gamebanana'):
+                self.gamebanana.set_download_progress(p, s)
+        self._dlProgress.connect(_on_p)
         self._dlDone.connect(lambda path: (
             self.progressDialog.hide(), 
             self.fileImport(path, reload=False), 
             setattr(self, "reloadPending", True),
-            self.gamebanana.update_installed_mods(self.getInstalledModNames())
+            self.gamebanana.update_installed_mods(self.getInstalledModNames()),
+            self.gamebanana.set_download_progress(100, "Done") if hasattr(self, 'gamebanana') else None
         ))
-        self._dlError.connect(lambda msg: (self.progressDialog.hide(), self.showError("Download Error", msg)))
+        self._dlError.connect(lambda msg: (
+            self.progressDialog.hide(),
+            self.showError("Download Error", msg),
+            self.gamebanana.set_download_progress(100, "Error") if hasattr(self, 'gamebanana') else None
+        ))
 
         def download():
             try:
@@ -1255,7 +1279,7 @@ class ModLoader(QMainWindow):
                 self.showError("ZIP Error", f"Could not open ZIP file:\n{e}")
                 return
             if not bmod_found:
-                self.showError("No .bmod found", f"The ZIP '{fileName}' does not contain any .bmod files.")
+                self.showError("No .bmod found", f"<font color='red'>This file is not compatible with the .bmod loader, it will not be downloaded</font>")
                 return
         else:
             # Unsupported extension — silently skip
@@ -1287,53 +1311,96 @@ class ModLoader(QMainWindow):
 
     queueUrlSignal = Signal()
 
+    def handleGameBananaDownload(self, url, fname):
+        print(f"[GameBanana] Received download request: URL='{url}', Filename='{fname}'")
+        mid = None
+        try:
+            data_str = url.split(":", 1)[1].strip("/")
+            parts = [p.strip() for p in data_str.split(",") if p.strip()]
+            if len(parts) >= 2 and parts[1].isdigit():
+                mid = int(parts[1])
+        except: pass
+
+        try:
+            res = self.urlImport(url, reload=False)
+            self.reloadPending = True
+            print(f"[GameBanana] Download & import completed with status: {res}")
+            if res is True:
+                if mid and hasattr(self, 'gamebanana'):
+                    self.gamebanana.mark_mod_downloaded(mid)
+            elif res is False:
+                if mid and hasattr(self, 'gamebanana'):
+                    self.gamebanana.mark_mod_incompatible(mid)
+        except Exception as e:
+            print(f"[GameBanana ERROR] Download failed: {e}")
+            import traceback
+            traceback.print_exc()
+            if mid and hasattr(self, 'gamebanana'):
+                self.gamebanana.mark_mod_error(mid)
+            self.showError("Download Failed", f"An error occurred while downloading:\n{e}")
+
     def queueUrl(self):
         for url in self.importQueue.iterUrl():
             self.urlImport(url)
 
-    def urlImport(self, url: str, reload=True):
-
-        self.setForeground()
-
-        data = url.split(":", 1)[1].strip("/")
-        splitData = [p for p in data.split(",") if p.strip()]  # strip empty trailing parts
-
-        if len(splitData) >= 3:
-            tag, modId, dlId = splitData[0], splitData[1], splitData[2]
-            zipUrl = f"https://gamebanana.com/dl/{dlId}"
-        else:
-            zipUrl = ""
-            return
-
-        archivePath = os.path.join(self.modsPath, "_mod.archive")
-
-        self.progressDialog.setMaximum(100)
-        self.progressDialog.setTitle("Download mod")
-        self.progressDialog.setContent("")
-        self.progressDialog.show()
-        QApplication.processEvents()
-        try:
-            # GameBanana requires a User-Agent header, otherwise it returns HTTP 403 Forbidden.
-            opener = urllib.request.build_opener()
-            opener.addheaders = [('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36')]
-            urllib.request.install_opener(opener)
+    def urlImport(self, url, reload=True):
+        print(f"[urlImport] Handling import for URL: '{url}' (reload={reload})")
+        data_str = url.split(":", 1)[1].strip("/")
+        parts = [p.strip() for p in data_str.split(",") if p.strip()]
+        if len(parts) < 3:
+            print(f"[urlImport ERROR] Invalid bmod URL format: '{url}'")
+            return False
             
-            urllib.request.urlretrieve(zipUrl, archivePath, self.handleUpdateApp)
+        modType, modID, fileID = parts[0], parts[1], parts[2]
+        mid_val = int(modID) if modID.isdigit() else None
+
+        webUrl = f"https://gamebanana.com/dl/{fileID}"
+        archivePath = os.path.join(self.modsPath, f"{modType}_{modID}_{fileID}")
+        print(f"[urlImport] Target download URL: {webUrl}")
+        print(f"[urlImport] Target archive path: {archivePath}")
+
+        def reporthook(count, blockSize, totalSize):
+            if totalSize > 0:
+                percent = int(count * blockSize * 100 / totalSize)
+                percent = min(100, max(0, percent))
+                self.progressDialog.setContent(f"Download: {percent}%")
+                if hasattr(self, 'gamebanana'):
+                    self.gamebanana.set_download_progress(percent, mid=mid_val)
+                QApplication.processEvents()
+
+        if reload:
+            self.progressDialog.setTitle("Import mod from Gamebanana...")
+            self.progressDialog.setContent("Download...")
+            self.progressDialog.show()
+
+        try:
+                    # Install User-Agent opener to prevent GameBanana HTTP 403 Forbidden errors
+            opener = urllib.request.build_opener()
+            opener.addheaders = [('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')]
+            urllib.request.install_opener(opener)
+
+            urllib.request.urlretrieve(webUrl, archivePath, reporthook)
+            file_size = os.path.getsize(archivePath) if os.path.exists(archivePath) else 0
+            print(f"[urlImport] Download finished. Downloaded archive size: {file_size} bytes")
 
             with open(archivePath, "rb") as file:
                 _signature = file.read(3)
-
+            print(f"[urlImport] Archive header signature: {_signature}")
 
             bmod_found = False
+            extracted_bmod_filename = None
 
             if _signature.startswith(b"7z"):
+                print("[urlImport] Extracting 7z archive...")
                 with py7zr.SevenZipFile(archivePath) as mod7z:
                     names = mod7z.getnames()
-
+                    print(f"[urlImport] Files inside 7z: {names}")
                     for file in names:
                         if file.endswith(f".{core.MOD_FILE_FORMAT}"):
                             bmod_found = True
                             target_fn = os.path.basename(file)
+                            extracted_bmod_filename = target_fn
+                            print(f"[urlImport] Extracting .bmod file: '{file}' -> '{target_fn}'")
 
                             self.progressDialog.setContent(f"Extract: '{target_fn}'")
                             QApplication.processEvents()
@@ -1348,35 +1415,59 @@ class ModLoader(QMainWindow):
                                     os.rename(old_path, new_path)
 
             elif _signature.startswith(b"Rar"):
-                with rarfile.RarFile(archivePath) as modRar:
-                    names = modRar.namelist()
+                print("[urlImport] Extracting RAR archive...")
+                rar_success = False
+                try:
+                    with rarfile.RarFile(archivePath) as modRar:
+                        names = modRar.namelist()
+                        print(f"[urlImport] Files inside RAR: {names}")
+                        for file in names:
+                            if file.endswith(f".{core.MOD_FILE_FORMAT}"):
+                                bmod_found = True
+                                target_fn = os.path.basename(file)
+                                extracted_bmod_filename = target_fn
+                                print(f"[urlImport] Extracting .bmod file: '{file}' -> '{target_fn}'")
 
-                    for file in names:
-                        if file.endswith(f".{core.MOD_FILE_FORMAT}"):
-                            bmod_found = True
-                            target_fn = os.path.basename(file)
-
-                            self.progressDialog.setContent(f"Extract: '{target_fn}'")
-                            QApplication.processEvents()
-                            
-                            # Extracting with rarfile can be tricky for flattening, 
-                            # easiest is to extract then move
-                            modRar.extract(file, self.modsPath)
-                            if os.path.dirname(file):
-                                old_path = os.path.join(self.modsPath, file)
-                                new_path = os.path.join(self.modsPath, target_fn)
-                                if os.path.exists(old_path):
-                                    if os.path.exists(new_path): os.remove(new_path)
-                                    os.rename(old_path, new_path)
+                                self.progressDialog.setContent(f"Extract: '{target_fn}'")
+                                QApplication.processEvents()
+                                
+                                modRar.extract(file, self.modsPath)
+                                if os.path.dirname(file):
+                                    old_path = os.path.join(self.modsPath, file)
+                                    new_path = os.path.join(self.modsPath, target_fn)
+                                    if os.path.exists(old_path):
+                                        if os.path.exists(new_path): os.remove(new_path)
+                                        os.rename(old_path, new_path)
+                                rar_success = True
+                except Exception as rar_err:
+                    print(f"[urlImport ERROR] rarfile module extraction error: {rar_err}. Attempting WinRAR executable fallback...")
+                    for winrar_exe in [r"C:\Program Files\WinRAR\WinRAR.exe", r"C:\Program Files (x86)\WinRAR\WinRAR.exe", r"C:\Program Files\WinRAR\unrar.exe", r"C:\Program Files (x86)\WinRAR\unrar.exe"]:
+                        if os.path.exists(winrar_exe):
+                            try:
+                                subprocess.run([winrar_exe, "e", "-y", archivePath, f"*.{core.MOD_FILE_FORMAT}", self.modsPath], capture_output=True)
+                                bmod_files = [f for f in os.listdir(self.modsPath) if f.endswith(f".{core.MOD_FILE_FORMAT}")]
+                                if bmod_files:
+                                    bmod_found = True
+                                    extracted_bmod_filename = bmod_files[0]
+                                    rar_success = True
+                                    print(f"[urlImport] WinRAR fallback successfully extracted .bmod files!")
+                                    break
+                            except Exception as e:
+                                print(f"[urlImport ERROR] WinRAR fallback error: {e}")
+                    if not rar_success and not bmod_found:
+                        raise Exception(f"Could not extract RAR file. Please ensure WinRAR is installed.\nDetail: {rar_err}")
 
             elif _signature.startswith(b"PK"):
+                print("[urlImport] Extracting ZIP archive...")
                 with zipfile.ZipFile(archivePath) as modZip:
                     names = modZip.namelist()
-
+                    print(f"[urlImport] Files inside ZIP: {names}")
                     for file in names:
                         if file.endswith(f".{core.MOD_FILE_FORMAT}"):
                             bmod_found = True
                             target_fn = os.path.basename(file)
+                            extracted_bmod_filename = target_fn
+                            print(f"[urlImport] Extracting .bmod file: '{file}' -> '{target_fn}'")
 
                             self.progressDialog.setContent(f"Extract: '{target_fn}'")
                             QApplication.processEvents()
@@ -1391,10 +1482,12 @@ class ModLoader(QMainWindow):
                                     os.rename(old_path, new_path)
 
             if not bmod_found:
-
+                print("[urlImport WARNING] No .bmod file found in archive!")
+                self.progressDialog.hide()
+                if mid_val and hasattr(self, 'gamebanana'):
+                    self.gamebanana.mark_mod_incompatible(mid_val)
                 self.showError("Incompatible Mod Format", 
-                    "This mod does not contain a standard .bmod file or is packaged in a way that cannot be automatically installed.\n\n"
-                    "Please download it manually from the website and follow the installation instructions provided by the author.")
+                    "This mod is not compatible with the Brawlhalla Mod Loader. Please check the GameBanana page for manual installation instructions.")
                 return False
 
             if reload:
@@ -1402,14 +1495,35 @@ class ModLoader(QMainWindow):
             else:
                 if hasattr(self, 'gamebanana'):
                     self.gamebanana.update_installed_mods(self.getInstalledModNames())
-            # Mark as downloaded ONLY IF SUCCESSFUL
+
+            if mid_val and hasattr(self, 'gamebanana'):
+                if extracted_bmod_filename:
+                    self.gamebanana.track_installed_mod_file(extracted_bmod_filename, mid_val, fileID)
+                else:
+                    self.gamebanana.mark_mod_downloaded(mid_val)
+
+            self.progressDialog.hide()
+            print("[urlImport SUCCESS] Mod successfully downloaded and imported!")
+            return True
+
+        except rarfile.RarCannotExec:
+            print("[urlImport ERROR] WinRar unrar.exe not found")
+            self.showError("Unpack error:", "WinRar 'unrar.exe' not found. Please install WinRar or add its installation folder to your Windows PATH to support .rar mod files.")
+            return False
+
+        except Exception as e:
+            print(f"[urlImport ERROR] Automatic import failed: {e}")
+            import traceback
+            traceback.print_exc()
             try:
-                parts = url.split(":", 1)[1].strip("/").split(",")
-                if len(parts) >= 2:
-                    mid = int(parts[1])
-                    if hasattr(self, 'gamebanana'):
-                        self.gamebanana.mark_mod_downloaded(mid)
-            except: pass
+                downloads_path = os.path.join(os.path.expanduser("~"), "Downloads", f"mod_{dlId}.zip")
+                urllib.request.urlretrieve(zipUrl, downloads_path)
+                self.showError("Automatic Import Failed", 
+                    f"The automatic installation failed, but we've downloaded the mod to your Downloads folder: mod_{dlId}.zip\n\nError: {str(e)}")
+                os.startfile(os.path.join(os.path.expanduser("~"), "Downloads"))
+            except Exception as e2:
+                print(f"[urlImport ERROR] Manual download fallback also failed: {e2}")
+                self.showError("Operation failed:", "".join(traceback.format_exception(*sys.exc_info())))
 
             self.progressDialog.hide()
             return True
