@@ -1641,7 +1641,7 @@ class ModDetailPanel(QWidget):
             
             fid = f.get("_idRow")
             url = f"bmod://Mod,{self.mid},{fid}"
-            btn_dl.clicked.connect(lambda *args, u=url, fn=fname_str: self.download_clicked.emit(u, fn))
+            btn_dl.clicked.connect(lambda _, u=url, fn=fname_str: self.download_clicked.emit(u, fn))
             
             fs = f.get("_nFilesize", 0)
             size_str = f"{fs/(1024*1024):.1f} MB" if fs > 1024*1024 else f"{fs/1024:.1f} KB"

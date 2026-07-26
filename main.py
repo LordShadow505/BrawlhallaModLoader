@@ -584,6 +584,7 @@ class ModLoader(QMainWindow):
 
     def showErrorNotifications(self):
         if self.errors:
+            import re
             errors = []
             errorsNotifications = self.errors.copy()
             self.errors.clear()
@@ -591,6 +592,21 @@ class ModLoader(QMainWindow):
             for notif in errorsNotifications:
                 ntype = notif.notificationType
                 string = ""
+
+                mod_hash = notif.args[0] if notif.args and isinstance(notif.args[0], str) else None
+                mod_is_ex = False
+                if mod_hash and hasattr(self, 'mods') and mod_hash in self.mods.mods:
+                    mod_is_ex = bool(re.search(r'\bEX\b', self.mods.mods[mod_hash].name, re.IGNORECASE))
+
+                if mod_is_ex and ntype in [
+                    NotificationType.InstallingModNotFoundGameSwf,
+                    NotificationType.InstallingModNotFoundFileElement,
+                    NotificationType.InstallingModSwfSoundSymbolclassNotExist,
+                    NotificationType.InstallingModSoundNotExist,
+                    NotificationType.InstallingModSwfSpriteSymbolclassNotExist,
+                    NotificationType.InstallingModSpriteNotExist
+                ]:
+                    continue
 
                 # Loader
                 if ntype == NotificationType.LoadingModIsEmpty:
@@ -1458,12 +1474,10 @@ class ModLoader(QMainWindow):
                         raise Exception(f"Could not extract RAR file. Please ensure WinRAR is installed.\nDetail: {rar_err}")
 
             elif _signature.startswith(b"PK"):
-                print("[urlImport] Processing ZIP archive / .bmod file...")
+                print("[urlImport] Extracting ZIP archive...")
                 with zipfile.ZipFile(archivePath) as modZip:
                     names = modZip.namelist()
                     print(f"[urlImport] Files inside ZIP: {names}")
-                    
-                    # 1. Search for explicit .bmod file inside ZIP
                     for file in names:
                         if file.endswith(f".{core.MOD_FILE_FORMAT}"):
                             bmod_found = True
@@ -1474,6 +1488,7 @@ class ModLoader(QMainWindow):
                             self.progressDialog.setContent(f"Extract: '{target_fn}'")
                             QApplication.processEvents()
                             
+                            # Extract and move
                             modZip.extract(file, self.modsPath)
                             if os.path.dirname(file):
                                 old_path = os.path.join(self.modsPath, file)
@@ -1481,26 +1496,6 @@ class ModLoader(QMainWindow):
                                 if os.path.exists(old_path):
                                     if os.path.exists(new_path): os.remove(new_path)
                                     os.rename(old_path, new_path)
-
-                    # 2. If no .bmod file inside, check if ZIP itself contains mod assets/metadata
-                    if not bmod_found:
-                        target_fn = f"mod_{modID}.{core.MOD_FILE_FORMAT}"
-                        target_path = os.path.join(self.modsPath, target_fn)
-                        import shutil
-                        shutil.copy2(archivePath, target_path)
-                        bmod_found = True
-                        extracted_bmod_filename = target_fn
-                        print(f"[urlImport] ZIP treated directly as .bmod file: '{target_fn}'")
-
-            # Fallback: if archive signature didn't match 7z, Rar, or PK, treat directly as .bmod file
-            if not bmod_found and os.path.exists(archivePath) and os.path.getsize(archivePath) > 0:
-                target_fn = f"mod_{modID}.{core.MOD_FILE_FORMAT}"
-                target_path = os.path.join(self.modsPath, target_fn)
-                import shutil
-                shutil.copy2(archivePath, target_path)
-                bmod_found = True
-                extracted_bmod_filename = target_fn
-                print(f"[urlImport] Unrecognized signature, treated directly as .bmod file: '{target_fn}'")
 
             if not bmod_found:
                 print("[urlImport WARNING] No .bmod file found in archive!")

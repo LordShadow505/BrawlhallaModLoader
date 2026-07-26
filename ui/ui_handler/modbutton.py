@@ -64,6 +64,11 @@ class ModButton(QWidget):
 
     def updateData(self):
         self.ui.modName.setText(self.modClass.name)
+        is_ex = bool(re.search(r'\bEX\b', self.modClass.name, re.IGNORECASE))
+        if is_ex:
+            self.ui.modName.setStyleSheet("QLabel{ color: #FFA500; }")
+        else:
+            self.ui.modName.setStyleSheet("QLabel{ color: #eeeeee; }")
         self.ui.gameVersion.setText(f"[{self.modClass.gameVersion}]")
         self.ui.modAuthor.setText("Author: " + self.modClass.author)
         if self.modClass.currentVersion:

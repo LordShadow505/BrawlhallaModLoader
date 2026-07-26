@@ -20,15 +20,15 @@ class ModClass:
                  date: float = 0.0,
                  favorite: bool = False
                  ):
-        self.gameVersion = gameVersion
-        self.name = name
-        self.author = author
-        self.version = version
-        self.description = TextFormatter.format(description)
-        self.tags = tags
-        self.previewsPaths = previewsPaths
-        self.hash = hash
-        self.platform = platform
+        self.gameVersion = gameVersion or ""
+        self.name = name or ""
+        self.author = author or ""
+        self.version = version or ""
+        self.description = TextFormatter.format(description or "")
+        self.tags = tags or []
+        self.previewsPaths = previewsPaths or []
+        self.hash = hash or ""
+        self.platform = platform if platform is not None else ""
         self.installed = installed
         self.currentVersion = currentVersion
         self.modFileExist = modFileExist

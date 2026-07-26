@@ -379,11 +379,34 @@ class Mods(QWidget):
         #if modClass.modFileExist:
         AddToFrame(self.modsActions.mainFrame, self.modsActions.deleteMod)
 
+        import re
+        is_ex = bool(re.search(r'\bEX\b', modClass.name, re.IGNORECASE))
+        if is_ex:
+            self.body.modName.setStyleSheet("color: #FFA500;")
+        else:
+            self.body.modName.setStyleSheet("color: #eeeeee;")
+
         self.setPreviewsPaths(modClass.previewsPaths)
         self.body.modName.setText(modClass.name)
-        self.body.modSource.setText("Source: " + modClass.platform)
+        source_text = modClass.platform if modClass.platform is not None else ""
+        self.body.modSource.setText("Source: " + source_text)
         self.body.modVersion.setText("Version: " + modClass.version)
-        self.body.modDescription.setText(modClass.description)
+
+        desc = modClass.description or ""
+        if is_ex:
+            ex_warning_html = (
+                '<p style="color: #FFA500; font-weight: bold; background-color: #2D1E00; padding: 8px; border: 1px solid #FF8C00; border-radius: 4px;">'
+                'WARNING: This Mod is an EX-type mod. The official modloader may not support all features of this mod, '
+                'use the Unofficial Modloader to use it: '
+                '<a href="https://gamebanana.com/tools/20722" style="color: #3498db; text-decoration: underline;">https://gamebanana.com/tools/20722</a>'
+                '</p><br/>'
+            )
+            if "<body>" in desc:
+                desc = desc.replace("<body>", "<body>" + ex_warning_html)
+            else:
+                desc = ex_warning_html + desc
+
+        self.body.modDescription.setText(desc)
         self.body.modTags.setText("Tags: " + ", ".join(modClass.tags))
 
     def selectMod(self, modClass: ModClass):
