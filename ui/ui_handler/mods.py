@@ -140,11 +140,12 @@ class Mods(QWidget):
     selectedModButton: ModButton = None
     mods: Dict[str, ModClass] = {}
     modsButtons: List[ModButton] = []
-    wikiPreviewSignal = Signal(QPixmap, str)
+    wikiPreviewSignal = Signal(QPixmap, str, str)
 
     def __init__(self, installMethod, uninstallMethod, reinstallMethod, deleteMethod, reloadMethod, openFolderMethod, uninstallAllMethod, toggleFavoriteMethod, sortCallback, savePresetMethod=None, deletePresetMethod=None, applyPresetMethod=None, editPresetMethod=None, reloadPresetMethod=None):
         super().__init__()
 
+        self.active_hover_slug = None
         self.ui = Ui_Mods()
         self.ui.setupUi(self)
         self.toggleFavoriteMethod = toggleFavoriteMethod
@@ -180,6 +181,7 @@ class Mods(QWidget):
 
         self.body.modDescription.setOpenExternalLinks(True)
         self.body.modDescription.highlighted.connect(self.onReplacementHovered)
+        self.body.modDescription.anchorClicked.connect(self.hideWikiPreviewCard)
         self.body.modDescription.viewport().installEventFilter(self)
 
         # Native PySide6 Single Unified Wiki Image Preview Card Container
@@ -235,6 +237,47 @@ class Mods(QWidget):
 
         self.modDescriptionsAndActionsLayout.insertWidget(2, self.warningFrame)
 
+        # Replaces Info Card Frame (Electric Blue #526eff)
+        self.replacesFrame = QFrame()
+        self.replacesFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
+        replacesOuterLayout = QVBoxLayout(self.replacesFrame)
+        replacesOuterLayout.setContentsMargins(10, 8, 10, 8)
+        replacesOuterLayout.setSpacing(6)
+
+        replacesHeaderFrame = QFrame()
+        replacesHeaderFrame.setStyleSheet("background: transparent; border: none;")
+        replacesHeaderLayout = QHBoxLayout(replacesHeaderFrame)
+        replacesHeaderLayout.setContentsMargins(0, 0, 0, 0)
+        replacesHeaderLayout.setSpacing(8)
+
+        replacesIconLabel = QLabel()
+        replacesIconLabel.setPixmap(get_tinted_svg_pixmap(mod_warning_icon_path, "#526eff", 16))
+        replacesIconLabel.setStyleSheet("background: transparent; border: none; padding: 0px;")
+        replacesHeaderLayout.addWidget(replacesIconLabel)
+
+        replacesTitleLabel = QLabel("This Mod Replaces:")
+        replacesTitleLabel.setStyleSheet("color: #526eff; font-size: 11px; font-weight: bold; border: none; background: transparent;")
+        replacesHeaderLayout.addWidget(replacesTitleLabel, 1)
+
+        replacesOuterLayout.addWidget(replacesHeaderFrame)
+
+        from PySide6.QtWidgets import QTextBrowser
+        from PySide6.QtGui import QTextOption
+        self.replacesListLabel = QTextBrowser()
+        self.replacesListLabel.setOpenExternalLinks(True)
+        self.replacesListLabel.setLineWrapMode(QTextBrowser.NoWrap)
+        self.replacesListLabel.setWordWrapMode(QTextOption.NoWrap)
+        self.replacesListLabel.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.replacesListLabel.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.replacesListLabel.setStyleSheet("background: transparent; border: none; color: #FFFFFF; font-size: 11px;")
+        self.replacesListLabel.highlighted.connect(self.onReplacementHovered)
+        self.replacesListLabel.anchorClicked.connect(self.hideWikiPreviewCard)
+        self.replacesListLabel.viewport().installEventFilter(self)
+        replacesOuterLayout.addWidget(self.replacesListLabel)
+
+        self.modDescriptionsAndActionsLayout.insertWidget(3, self.replacesFrame)
+        self.replacesFrame.hide()
+
         # EX Mod Warning Notice (Gold/Amber #FFA500)
         self.exWarningFrame = QFrame()
         self.exWarningFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
@@ -257,7 +300,7 @@ class Mods(QWidget):
         exWarningTextLabel.setStyleSheet("color: #FFA500; font-size: 10px; font-weight: bold; border: none; background: transparent;")
         exWarningLayout.addWidget(exWarningTextLabel, 1)
 
-        self.modDescriptionsAndActionsLayout.insertWidget(3, self.exWarningFrame)
+        self.modDescriptionsAndActionsLayout.insertWidget(4, self.exWarningFrame)
         self.exWarningFrame.hide()
 
         modsListFrame = QFrame()
@@ -577,16 +620,22 @@ class Mods(QWidget):
         self.body.modPreview.setPixmap(pixmap)
         self.onResize()
 
+    def hideWikiPreviewCard(self, *args):
+        self.active_hover_slug = None
+        if hasattr(self, 'wikiPreviewCard'):
+            self.wikiPreviewCard.hide()
+
     def onReplacementHovered(self, url):
         url_str = url.toString() if hasattr(url, 'toString') else str(url or "")
         if url_str and "brawlhalla.wiki.gg/wiki/" in url_str:
             slug = url_str.split("brawlhalla.wiki.gg/wiki/")[-1].split("#")[0]
             clean_name = slug.replace("_", " ")
+            self.active_hover_slug = slug
 
             import threading
             threading.Thread(target=self._fetch_and_show_wiki_preview, args=(slug, clean_name), daemon=True).start()
         else:
-            self.wikiPreviewCard.hide()
+            self.hideWikiPreviewCard()
 
     def _fetch_and_show_wiki_preview(self, slug: str, clean_name: str):
         import requests
@@ -620,9 +669,11 @@ class Mods(QWidget):
             img = QImage()
             if img.loadFromData(dataData):
                 pixmap = QPixmap.fromImage(img).scaled(230, 230, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.wikiPreviewSignal.emit(pixmap, clean_name)
+                self.wikiPreviewSignal.emit(pixmap, clean_name, slug)
 
-    def showWikiPreviewCard(self, pixmap: QPixmap, clean_name: str):
+    def showWikiPreviewCard(self, pixmap: QPixmap, clean_name: str, slug: str):
+        if getattr(self, 'active_hover_slug', None) != slug:
+            return
         from PySide6.QtCore import QPoint
         from PySide6.QtGui import QCursor
         self.wikiPreviewTitle.setText(clean_name)
@@ -635,10 +686,12 @@ class Mods(QWidget):
         self.wikiPreviewCard.raise_()
 
     def eventFilter(self, watched, event):
-        if hasattr(self, 'body') and hasattr(self.body, 'modDescription') and watched == self.body.modDescription.viewport():
-            if event.type() in (QEvent.Leave, QEvent.FocusOut):
-                if hasattr(self, 'wikiPreviewCard'):
-                    self.wikiPreviewCard.hide()
+        if hasattr(self, 'body') and (
+            (hasattr(self.body, 'modDescription') and watched == self.body.modDescription.viewport()) or
+            (hasattr(self, 'replacesListLabel') and watched == self.replacesListLabel.viewport())
+        ):
+            if event.type() in (QEvent.Leave, QEvent.FocusOut, QEvent.MouseButtonPress):
+                self.hideWikiPreviewCard()
         return super().eventFilter(watched, event)
 
     def onTagButtonClicked(self, tag_name: str):
@@ -949,30 +1002,28 @@ class Mods(QWidget):
         self.body.modVersion.setText("Version: " + modClass.version)
 
         desc = modClass.description or ""
+        self.body.modDescription.setText(desc)
+
         replacements = self.getModReplacements(modClass)
 
         if replacements:
             import urllib.parse
-            total_count = len(replacements)
-            display_items = replacements[:15]
-            
-            replaces_html = "<br/><div style='margin-top: 12px; border-top: 1px solid #33333A; padding-top: 10px;'>"
-            replaces_html += "<b style='color: #42A5F5; font-size: 12px;'>This mod replaces:</b><ul style='margin-top: 4px; margin-bottom: 4px; padding-left: 20px; color: #FFFFFF; font-size: 11px;'>"
-            for item in display_items:
+            replaces_html = "<ul style='margin-top: 2px; margin-bottom: 2px; padding-left: 18px; color: #FFFFFF; font-size: 11px; list-style-type: disc; white-space: nowrap;'>"
+            for item in replacements:
                 clean_name = item.split('(')[0].strip()
                 slug = clean_name.replace(' ', '_').replace("'", "%27")
                 wiki_url = f"https://brawlhalla.wiki.gg/wiki/{slug}"
-                replaces_html += f"<li style='margin-bottom: 3px;'><a href='{wiki_url}' style='color: #42A5F5; text-decoration: underline;'>{item}</a></li>"
+                replaces_html += f"<li style='margin-bottom: 3px; color: #FFFFFF; white-space: nowrap;'><a href='{wiki_url}' style='color: #FFFFFF; text-decoration: none; white-space: nowrap;'>{item}</a></li>"
             replaces_html += "</ul>"
 
-            if total_count > 15:
-                extra = total_count - 15
-                replaces_html += f"<p style='color: #9E9E9E; font-size: 11px; font-style: italic; margin-left: 5px;'>And {extra} More...</p>"
-            
-            replaces_html += "</div>"
-            desc += replaces_html
-
-        self.body.modDescription.setText(desc)
+            self.replacesListLabel.setHtml(replaces_html)
+            self.replacesListLabel.document().adjustSize()
+            doc_h = int(self.replacesListLabel.document().size().height())
+            self.replacesListLabel.setFixedHeight(doc_h + 12)
+            self.replacesFrame.show()
+        else:
+            self.replacesListLabel.setHtml("")
+            self.replacesFrame.hide()
 
         from ..utils.tags_helper import auto_detect_tags
         auto_tags = auto_detect_tags(modClass, replacements)
@@ -1043,6 +1094,7 @@ class Mods(QWidget):
         self.tagsContainerLayout.addStretch()
 
     def selectMod(self, modClass: ModClass):
+        self.hideWikiPreviewCard()
         for modButton in self.modsButtons:
             if modButton.modClass == modClass:
                 self.selectedModButton = modButton
