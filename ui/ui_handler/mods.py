@@ -260,29 +260,6 @@ class Mods(QWidget):
         self.modDescriptionsAndActionsLayout.insertWidget(3, self.exWarningFrame)
         self.exWarningFrame.hide()
 
-        # Replacements Notice Frame (Deep Blue #3e49bb)
-        self.replacementsFrame = QFrame()
-        self.replacementsFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
-        replacementsLayout = QHBoxLayout(self.replacementsFrame)
-        replacementsLayout.setContentsMargins(10, 6, 10, 6)
-        replacementsLayout.setSpacing(10)
-
-        replacementsIconLabel = QLabel()
-        replacementsIconLabel.setPixmap(get_tinted_svg_pixmap(mod_warning_icon_path, "#3e49bb", 18))
-        replacementsIconLabel.setStyleSheet("background: transparent; border: none; padding: 0px;")
-        replacementsLayout.addWidget(replacementsIconLabel)
-
-        self.replacementsTextLabel = QLabel()
-        self.replacementsTextLabel.setWordWrap(True)
-        self.replacementsTextLabel.setOpenExternalLinks(True)
-        self.replacementsTextLabel.linkHovered.connect(self.onReplacementHovered)
-        self.replacementsTextLabel.installEventFilter(self)
-        self.replacementsTextLabel.setStyleSheet("color: #FFFFFF; font-size: 10px; font-weight: bold; border: none; background: transparent;")
-        replacementsLayout.addWidget(self.replacementsTextLabel, 1)
-
-        self.modDescriptionsAndActionsLayout.insertWidget(4, self.replacementsFrame)
-        self.replacementsFrame.hide()
-
         modsListFrame = QFrame()
         layout = QVBoxLayout(modsListFrame)
         layout.setSpacing(0)
@@ -658,7 +635,7 @@ class Mods(QWidget):
         self.wikiPreviewCard.raise_()
 
     def eventFilter(self, watched, event):
-        if hasattr(self, 'body') and hasattr(self.body, 'modDescription') and (watched == self.body.modDescription.viewport() or (hasattr(self, 'replacementsTextLabel') and watched == self.replacementsTextLabel)):
+        if hasattr(self, 'body') and hasattr(self.body, 'modDescription') and watched == self.body.modDescription.viewport():
             if event.type() in (QEvent.Leave, QEvent.FocusOut):
                 if hasattr(self, 'wikiPreviewCard'):
                     self.wikiPreviewCard.hide()
@@ -975,29 +952,25 @@ class Mods(QWidget):
         replacements = self.getModReplacements(modClass)
 
         if replacements:
+            import urllib.parse
             total_count = len(replacements)
             display_items = replacements[:15]
             
-            replaces_html = "<b style='color: #3e49bb; font-size: 11px;'>This mod replaces:</b>"
-            replaces_html += "<ul style='margin-top: 4px; margin-bottom: 4px; padding-left: 18px; color: #FFFFFF; font-size: 11px;'>"
+            replaces_html = "<br/><div style='margin-top: 12px; border-top: 1px solid #33333A; padding-top: 10px;'>"
+            replaces_html += "<b style='color: #42A5F5; font-size: 12px;'>This mod replaces:</b><ul style='margin-top: 4px; margin-bottom: 4px; padding-left: 20px; color: #FFFFFF; font-size: 11px;'>"
             for item in display_items:
                 clean_name = item.split('(')[0].strip()
                 slug = clean_name.replace(' ', '_').replace("'", "%27")
                 wiki_url = f"https://brawlhalla.wiki.gg/wiki/{slug}"
-                replaces_html += f"<li style='margin-bottom: 3px; color: #FFFFFF;'><a href='{wiki_url}' style='color: #FFFFFF; text-decoration: underline;'>{item}</a></li>"
+                replaces_html += f"<li style='margin-bottom: 3px;'><a href='{wiki_url}' style='color: #42A5F5; text-decoration: underline;'>{item}</a></li>"
             replaces_html += "</ul>"
 
             if total_count > 15:
                 extra = total_count - 15
                 replaces_html += f"<p style='color: #9E9E9E; font-size: 11px; font-style: italic; margin-left: 5px;'>And {extra} More...</p>"
             
-            if hasattr(self, 'replacementsTextLabel'):
-                self.replacementsTextLabel.setText(replaces_html)
-            if hasattr(self, 'replacementsFrame'):
-                self.replacementsFrame.show()
-        else:
-            if hasattr(self, 'replacementsFrame'):
-                self.replacementsFrame.hide()
+            replaces_html += "</div>"
+            desc += replaces_html
 
         self.body.modDescription.setText(desc)
 

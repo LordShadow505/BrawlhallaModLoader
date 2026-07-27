@@ -43,7 +43,7 @@ class Ui_ModsActions(object):
         self.webPage.setFont(font)
         self.webPage.setCursor(QCursor(Qt.PointingHandCursor))
         self.webPage.setStyleSheet(u"background-color: #3396CD;\n"
-"border-radius: 10px;\n"
+"border-radius: 14px;\n"
 "color: #eeeeee;")
         icon = QIcon()
         icon.addFile(u":/icons/resources/icons/OpenWeb.png", QSize(), QIcon.Normal, QIcon.Off)
@@ -58,7 +58,7 @@ class Ui_ModsActions(object):
         self.install.setFont(font)
         self.install.setCursor(QCursor(Qt.PointingHandCursor))
         self.install.setStyleSheet(u"background-color: #43C15F;\n"
-"border-radius: 10px;\n"
+"border-radius: 14px;\n"
 "color: #eeeeee;")
         icon1 = QIcon()
         icon1.addFile(u":/icons/resources/icons/Install.png", QSize(), QIcon.Normal, QIcon.Off)
@@ -73,7 +73,7 @@ class Ui_ModsActions(object):
         self.uninstall.setFont(font)
         self.uninstall.setCursor(QCursor(Qt.PointingHandCursor))
         self.uninstall.setStyleSheet(u"background-color: #00B9A3;\n"
-"border-radius: 10px;\n"
+"border-radius: 14px;\n"
 "color: #eeeeee;")
         icon2 = QIcon()
         icon2.addFile(u":/icons/resources/icons/Uninstall.png", QSize(), QIcon.Normal, QIcon.Off)
@@ -88,7 +88,7 @@ class Ui_ModsActions(object):
         self.reinstall.setFont(font)
         self.reinstall.setCursor(QCursor(Qt.PointingHandCursor))
         self.reinstall.setStyleSheet(u"background-color: #CD33C7;\n"
-"border-radius: 10px;\n"
+"border-radius: 14px;\n"
 "color: #eeeeee;")
         icon3 = QIcon()
         icon3.addFile(u":/icons/resources/icons/UpdateModsTable.png", QSize(), QIcon.Normal, QIcon.Off)
@@ -103,7 +103,7 @@ class Ui_ModsActions(object):
         self.update.setFont(font)
         self.update.setCursor(QCursor(Qt.PointingHandCursor))
         self.update.setStyleSheet(u"background-color: #833DBB;\n"
-"border-radius: 10px;\n"
+"border-radius: 14px;\n"
 "color: #eeeeee;")
         icon4 = QIcon()
         icon4.addFile(u":/icons/resources/icons/Update.png", QSize(), QIcon.Normal, QIcon.Off)
@@ -118,7 +118,7 @@ class Ui_ModsActions(object):
         self.deleteMod.setFont(font)
         self.deleteMod.setCursor(QCursor(Qt.PointingHandCursor))
         self.deleteMod.setStyleSheet(u"background-color: #FF5050;\n"
-"border-radius: 10px;\n"
+"border-radius: 14px;\n"
 "color: #eeeeee;")
         icon5 = QIcon()
         icon5.addFile(u":/icons/resources/icons/Delete.png", QSize(), QIcon.Normal, QIcon.Off)

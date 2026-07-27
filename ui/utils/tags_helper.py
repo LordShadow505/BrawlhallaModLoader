@@ -154,10 +154,11 @@ def auto_detect_tags(mod_class, replacements: List[str] = None, lang_reader=None
     legends = get_all_legends(lang_reader)
 
     for rep in replacements:
-        if '(' in rep and ')' in rep:
-            has_weapon = True
-        else:
+        r_low = rep.lower()
+        if '(legend skin)' in r_low or not ('(' in r_low and ')' in r_low):
             has_costume = True
+        else:
+            has_weapon = True
 
         for leg in legends:
             if leg.lower() in rep.lower() and leg.lower() not in seen:

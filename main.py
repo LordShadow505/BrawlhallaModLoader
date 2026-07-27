@@ -620,7 +620,10 @@ class ModLoader(QMainWindow):
                                  currentVersion=modData.get("currentVersion", False),
                                  modFileExist=modData.get("modFileExist", False),
                                  date=modData.get("date", 0.0),
-                                 favorite=modData.get("hash", "") in self.config.favorites)
+                                 favorite=modData.get("hash", "") in self.config.favorites,
+                                 swfNames=modData.get("swfNames", []),
+                                 fileNames=modData.get("fileNames", []),
+                                 spriteNames=modData.get("spriteNames", []))
 
             self.mods.applySort(self.currentSortField, self.currentSortReverse)
             self.setModsScreen()
