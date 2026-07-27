@@ -82,27 +82,7 @@ def fmt_num(n):
     return str(n)
 
 
-CATEGORY_PALETTE = [
-    "#000000", "#32c12c", "#009888", "#3e49bb", "#526eff", "#7f4fc9", "#87c735", 
-    "#00a5f9", "#00bcd9", "#682cbf", "#ff9a00", "#e34c22", "#7c5547", 
-    "#5f7d8e", "#ff5500", "#d40c00", "#50342c"
-]
-
-CATEGORY_COLOR_MAP = {
-    "legend skins": "#3e49bb",
-    "ui": "#ff9a00",
-    "realms": "#682cbf",
-    "effects": "#e34c22",
-    "weapons": "#009888",
-}
-
-def get_category_color(name):
-    if not name: return "#3584e4"
-    key = str(name).strip().lower()
-    if key in CATEGORY_COLOR_MAP:
-        return CATEGORY_COLOR_MAP[key]
-    h = sum(ord(c) for c in str(name))
-    return CATEGORY_PALETTE[h % len(CATEGORY_PALETTE)]
+from ..utils.tags_helper import get_category_color, CATEGORY_PALETTE, CATEGORY_COLOR_MAP
 
 
 def extract_requirement_name(req):
@@ -211,13 +191,15 @@ class CategoryBadgePill(QPushButton):
     badge_clicked = Signal(int)
 
     def __init__(self, cat_id, cat_name, parent=None):
-        super().__init__(cat_name, parent)
+        from ..utils.tags_helper import normalize_tag
+        norm_name = normalize_tag(cat_name)
+        super().__init__(norm_name, parent)
         self.cat_id = int(cat_id) if cat_id else None
-        self.cat_name = cat_name
+        self.cat_name = norm_name
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedHeight(18)
         
-        bg_color = get_category_color(cat_name)
+        bg_color = get_category_color(norm_name)
         
         self.setStyleSheet(f"""
             QPushButton {{

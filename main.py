@@ -244,7 +244,12 @@ class ModLoader(QMainWindow):
                          openFolderMethod=self.openModsFolder,
                          uninstallAllMethod=self.uninstallAllMods,
                          toggleFavoriteMethod=self.toggleFavorite,
-                         sortCallback=self.updateSortState)
+                         sortCallback=self.updateSortState,
+                         savePresetMethod=self.savePreset,
+                         deletePresetMethod=self.deletePreset,
+                         applyPresetMethod=self.applyPreset,
+                         editPresetMethod=self.renamePreset,
+                         reloadPresetMethod=self.applyPreset)
 
         self.progressDialog = ProgressDialog(self)
         self.buttonsDialog = ButtonsDialog(self)
@@ -391,24 +396,68 @@ class ModLoader(QMainWindow):
                 self.controller.installMod(modHash)
             elif ntype == NotificationType.ModConflict:
                 modHash, modConflictHashes = notification.args
-                self.acceptDialog.setTitle("Conflict mods!")
-                content = "Mods:"
-
-                for modConflictHash in modConflictHashes:
-                    if modConflictHash in self.mods.mods:
-                        mod = self.mods.mods[modConflictHash]
-                        content += f"\n- {mod.name}"
-
-                    else:
-                        content += f"\n- UNKNOWN MOD: {modConflictHash}"
-                        print("ERROR: One of the installed mods was not found in the ModLoader!")
-
-                self.acceptDialog.setContent(content)
-                self.acceptDialog.setAccept(lambda: [self.acceptDialog.hide(), self.controller.installMod(modHash)])
-                self.acceptDialog.setCancel(self.acceptDialog.hide)
-
                 self.progressDialog.hide()
-                self.acceptDialog.show()
+
+                new_mod_name = self.mods.mods[modHash].name if modHash in self.mods.mods else "New Mod"
+                conflicting_names = [self.mods.mods[h].name if h in self.mods.mods else f"Installed Mod ({h[:6]})" for h in modConflictHashes]
+
+                from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QRadioButton, QButtonGroup, QPushButton, QHBoxLayout
+                from PySide6.QtCore import Qt
+
+                diag = QDialog(self)
+                diag.setWindowTitle("Mod Conflict & Priority Order")
+                diag.setMinimumWidth(440)
+                diag.setStyleSheet("""
+                    QDialog { background-color: #141518; color: #FFFFFF; }
+                    QLabel { color: #FFFFFF; font-size: 12px; }
+                    QRadioButton { color: #FFFFFF; font-size: 12px; font-weight: bold; spacing: 8px; }
+                    QRadioButton::indicator { width: 16px; height: 16px; }
+                    QPushButton { background-color: #24638C; color: #FFFFFF; border-radius: 4px; padding: 6px 16px; font-weight: bold; }
+                    QPushButton:hover { background-color: #347BA9; }
+                """)
+
+                layout = QVBoxLayout(diag)
+                layout.setSpacing(12)
+
+                lbl_title = QLabel("Conflict Detected!")
+                lbl_title.setStyleSheet("color: #FFA500; font-size: 15px; font-weight: bold;")
+                layout.addWidget(lbl_title)
+
+                lbl_desc = QLabel(f"The mod <b>'{new_mod_name}'</b> conflicts with: <i>{', '.join(conflicting_names)}</i>.<br><br><b>Choose priority order for conflicting files:</b>")
+                lbl_desc.setWordWrap(True)
+                layout.addWidget(lbl_desc)
+
+                bg = QButtonGroup(diag)
+                rb1 = QRadioButton(f"High Priority: '{new_mod_name}' (Overwrite installed mods)")
+                rb1.setChecked(True)
+                bg.addButton(rb1, 1)
+                layout.addWidget(rb1)
+
+                rb2 = QRadioButton(f"High Priority: Currently installed mod(s) (Keep installed mods)")
+                bg.addButton(rb2, 2)
+                layout.addWidget(rb2)
+
+                btn_lay = QHBoxLayout()
+                btn_ok = QPushButton("Apply Selected Priority")
+                btn_cancel = QPushButton("Cancel")
+                btn_cancel.setStyleSheet("background-color: #2A2C32;")
+                btn_lay.addStretch()
+                btn_lay.addWidget(btn_ok)
+                btn_lay.addWidget(btn_cancel)
+                layout.addLayout(btn_lay)
+
+                btn_ok.clicked.connect(diag.accept)
+                btn_cancel.clicked.connect(diag.reject)
+
+                if diag.exec() == QDialog.Accepted:
+                    if bg.checkedId() == 1:
+                        # High Priority: New Mod -> Overwrite installed conflicting mods
+                        self.controller.installMod(modHash)
+                    else:
+                        # High Priority: Installed Mod -> Install new mod first, then re-apply installed conflicting mods on top
+                        self.controller.installMod(modHash)
+                        for ch in modConflictHashes:
+                            self.controller.installMod(ch)
 
 
             # Installing
@@ -446,11 +495,25 @@ class ModLoader(QMainWindow):
                 if self.mods.selectedModButton and self.mods.selectedModButton.modClass.hash == modHash:
                     self.mods.updateData()
                 
+                if hasattr(self, 'bulkTotalCount') and self.bulkTotalCount > 0:
+                    self.bulkCompletedCount += 1
+                    self.progressDialog.setValue(self.bulkCompletedCount)
+                    self.progressDialog.setContent(f"Applying preset mods ({self.bulkCompletedCount}/{self.bulkTotalCount})...")
+
                 if self.bulkOperationCount > 0:
                     self.bulkOperationCount -= 1
                     
                 if self.bulkOperationCount <= 0:
+                    self.bulkTotalCount = 0
+                    self.bulkCompletedCount = 0
                     self.progressDialog.hide()
+                    if hasattr(self, 'currentPresetAppliedName') and self.currentPresetAppliedName:
+                        pname = self.currentPresetAppliedName
+                        self.currentPresetAppliedName = None
+                        self.buttonsDialog.setTitle("Preset Synced")
+                        self.buttonsDialog.setContent(TextFormatter.format(f"Mod preset <b>'{pname}'</b> has been loaded and synced successfully!", 11))
+                        self.buttonsDialog.setButtons([("OK", self.buttonsDialog.hide)])
+                        self.buttonsDialog.show()
                     
                 if self.currentSortField == "Installed":
                     self.mods.applySort(self.currentSortField, self.currentSortReverse)
@@ -488,11 +551,25 @@ class ModLoader(QMainWindow):
                 if self.mods.selectedModButton and self.mods.selectedModButton.modClass.hash == modHash:
                     self.mods.updateData()
 
+                if hasattr(self, 'bulkTotalCount') and self.bulkTotalCount > 0:
+                    self.bulkCompletedCount += 1
+                    self.progressDialog.setValue(self.bulkCompletedCount)
+                    self.progressDialog.setContent(f"Applying preset mods ({self.bulkCompletedCount}/{self.bulkTotalCount})...")
+
                 if self.bulkOperationCount > 0:
                     self.bulkOperationCount -= 1
                     
                 if self.bulkOperationCount <= 0:
+                    self.bulkTotalCount = 0
+                    self.bulkCompletedCount = 0
                     self.progressDialog.hide()
+                    if hasattr(self, 'currentPresetAppliedName') and self.currentPresetAppliedName:
+                        pname = self.currentPresetAppliedName
+                        self.currentPresetAppliedName = None
+                        self.buttonsDialog.setTitle("Preset Synced")
+                        self.buttonsDialog.setContent(TextFormatter.format(f"Mod preset <b>'{pname}'</b> has been loaded and synced successfully!", 11))
+                        self.buttonsDialog.setButtons([("OK", self.buttonsDialog.hide)])
+                        self.buttonsDialog.show()
                     
                 if self.currentSortField == "Installed":
                     self.mods.applySort(self.currentSortField, self.currentSortReverse)
@@ -848,6 +925,147 @@ class ModLoader(QMainWindow):
         self.acceptDialog.setCancel(self.acceptDialog.hide)
         self.acceptDialog.show()
 
+    def savePreset(self, name: str):
+        if not name:
+            return
+        installed_hashes = [m.hash for m in self.mods.mods.values() if m.installed]
+        presets = dict(self.config.presets)
+        presets[name] = installed_hashes
+        self.config.presets = presets
+        self.mods.loadPresetsList()
+        # Automatically select the newly saved preset in the combo box
+        idx = self.mods.presetCombo.findText(name)
+        if idx >= 0:
+            self.mods.presetCombo.blockSignals(True)
+            self.mods.presetCombo.setCurrentIndex(idx)
+            self.mods.presetCombo.blockSignals(False)
+
+        self.buttonsDialog.setTitle("Preset Saved")
+        self.buttonsDialog.setContent(TextFormatter.format(f"Mod preset <b>'{name}'</b> has been saved successfully with current installed mods!", 11))
+        self.buttonsDialog.setButtons([("OK", self.buttonsDialog.hide)])
+        self.buttonsDialog.show()
+
+    def renamePreset(self, old_name: str, new_name: str):
+        if not old_name or not new_name or old_name == new_name:
+            return
+        presets = dict(self.config.presets)
+        if old_name in presets:
+            presets[new_name] = presets.pop(old_name)
+            self.config.presets = presets
+            self.mods.loadPresetsList()
+            idx = self.mods.presetCombo.findText(new_name)
+            if idx >= 0:
+                self.mods.presetCombo.blockSignals(True)
+                self.mods.presetCombo.setCurrentIndex(idx)
+                self.mods.presetCombo.blockSignals(False)
+
+    def deletePreset(self, name: str):
+        presets = dict(self.config.presets)
+        if name in presets:
+            del presets[name]
+            self.config.presets = presets
+            self.mods.loadPresetsList()
+
+    def applyPreset(self, name: str):
+        if self.checkGameRunning():
+            return
+        presets = self.config.presets
+        if name not in presets:
+            return
+        target_hashes = set(presets[name])
+
+        initial_installed = set(modHash for modHash, mod in self.mods.mods.items() if mod.installed)
+
+        missing_mods = []
+        valid_preset_hashes = set()
+        for modHash in target_hashes:
+            if modHash in self.mods.mods:
+                mod = self.mods.mods[modHash]
+                if not mod.modFileExist:
+                    missing_mods.append(mod.name)
+                else:
+                    valid_preset_hashes.add(modHash)
+            else:
+                missing_mods.append(f"Unknown Mod ({modHash[:8]}...)")
+
+        if missing_mods:
+            from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
+
+            diag = QDialog(self)
+            diag.setWindowTitle("Missing Mod File Interruption")
+            diag.setMinimumWidth(450)
+            diag.setStyleSheet("""
+                QDialog { background-color: #141518; color: #FFFFFF; }
+                QLabel { color: #FFFFFF; font-size: 12px; }
+                QPushButton { background-color: #24638C; color: #FFFFFF; border-radius: 4px; padding: 6px 16px; font-weight: bold; }
+                QPushButton:hover { background-color: #347BA9; }
+            """)
+
+            layout = QVBoxLayout(diag)
+            layout.setSpacing(12)
+
+            lbl_title = QLabel("Missing Mod Files Detected!")
+            lbl_title.setStyleSheet("color: #FFA500; font-size: 15px; font-weight: bold;")
+            layout.addWidget(lbl_title)
+
+            msg_text = "The following mod(s) in this preset were deleted or moved from your disk:<br><ul>"
+            for mm in missing_mods:
+                msg_text += f"<li><b>{mm}</b></li>"
+            msg_text += "</ul><br><b>Choose an action:</b>"
+
+            lbl_desc = QLabel(msg_text)
+            lbl_desc.setWordWrap(True)
+            layout.addWidget(lbl_desc)
+
+            btn_lay = QHBoxLayout()
+            btn_continue = QPushButton("Skip Missing & Continue")
+            btn_cancel = QPushButton("Cancel & Rollback")
+            btn_cancel.setStyleSheet("background-color: #5C2626;")
+            btn_lay.addStretch()
+            btn_lay.addWidget(btn_continue)
+            btn_lay.addWidget(btn_cancel)
+            layout.addLayout(btn_lay)
+
+            btn_continue.clicked.connect(diag.accept)
+            btn_cancel.clicked.connect(diag.reject)
+
+            if diag.exec_() == QDialog.Accepted:
+                self._doApplyPreset(name, valid_preset_hashes, initial_installed)
+            else:
+                print(f"[PRESET] Preset apply cancelled by user due to missing mods.")
+                return
+        else:
+            self._doApplyPreset(name, target_hashes, initial_installed)
+
+    def _doApplyPreset(self, name: str, target_hashes: set, initial_installed: set = None):
+        mods_to_uninstall = [modHash for modHash, mod in self.mods.mods.items() if mod.installed and modHash not in target_hashes]
+        mods_to_install = [modHash for modHash in target_hashes if modHash in self.mods.mods and not self.mods.mods[modHash].installed and self.mods.mods[modHash].modFileExist]
+
+        total_ops = len(mods_to_uninstall) + len(mods_to_install)
+        if total_ops == 0:
+            self.buttonsDialog.setTitle("Preset Synced")
+            self.buttonsDialog.setContent(TextFormatter.format(f"Mod preset <b>'{name}'</b> is already active and fully synced!", 11))
+            self.buttonsDialog.setButtons([("OK", self.buttonsDialog.hide)])
+            self.buttonsDialog.show()
+            return
+
+        self.currentPresetAppliedName = name
+        self.bulkTotalCount = total_ops
+        self.bulkCompletedCount = 0
+        self.bulkOperationCount = total_ops
+
+        self.progressDialog.setMaximum(total_ops)
+        self.progressDialog.setValue(0)
+        self.progressDialog.setTitle(f"Applying Preset '{name}'")
+        self.progressDialog.setContent(f"Applying preset mods (0/{total_ops})...")
+        self.progressDialog.show()
+
+        for modHash in mods_to_uninstall:
+            self.controller.uninstallMod(modHash)
+
+        for modHash in mods_to_install:
+            self.controller.installMod(modHash)
+
     def _doClearCache(self):
         import shutil
         try:
@@ -963,7 +1181,7 @@ class ModLoader(QMainWindow):
             self.acceptDialog.setCancel(self.acceptDialog.hide)
             self.acceptDialog.show()
 
-    def installMod(self):
+    def installMod(self, modTarget=None):
         bh_path = getattr(core.worker.brawlhalla, 'BRAWLHALLA_PATH', None) if (hasattr(core, 'worker') and hasattr(core.worker, 'brawlhalla')) else None
         if not bh_path or not os.path.exists(bh_path) or not os.path.isfile(os.path.join(bh_path, "Brawlhalla.exe")):
             self.showBrawlhallaNotFoundDialog()
@@ -971,12 +1189,21 @@ class ModLoader(QMainWindow):
 
         if self.checkGameRunning():
             return
-            
-        if self.mods.selectedModButton is not None:
+
+        targetHash = None
+        if isinstance(modTarget, str):
+            targetHash = modTarget
+        elif hasattr(modTarget, 'modClass'):
+            targetHash = modTarget.modClass.hash
+        elif hasattr(modTarget, 'hash'):
+            targetHash = modTarget.hash
+        elif self.mods.selectedModButton is not None:
+            targetHash = self.mods.selectedModButton.modClass.hash
+
+        if targetHash:
             if self.bulkOperationCount <= 0:
                 self.bulkOperationCount = 1
-            modClass = self.mods.selectedModButton.modClass
-            self.controller.getModConflict(modClass.hash)
+            self.controller.getModConflict(targetHash)
 
     def toggleFavorite(self, modHash):
         favorites = self.config.favorites.copy()
@@ -992,15 +1219,21 @@ class ModLoader(QMainWindow):
     def uninstallMod(self, modButton=None):
         if self.checkGameRunning():
             return
-            
-        if modButton is None or isinstance(modButton, bool):
-            modButton = self.mods.selectedModButton
+
+        modHash = None
+        if isinstance(modButton, str):
+            modHash = modButton
+        elif hasattr(modButton, 'modClass'):
+            modHash = modButton.modClass.hash
+        elif hasattr(modButton, 'hash'):
+            modHash = modButton.hash
+        elif self.mods.selectedModButton is not None:
+            modHash = self.mods.selectedModButton.modClass.hash
+
+        if modHash:
             if self.bulkOperationCount <= 0:
                 self.bulkOperationCount = 1
-            
-        if modButton is not None:
-            modClass = modButton.modClass
-            self.controller.uninstallMod(modClass.hash)
+            self.controller.uninstallMod(modHash)
 
     def reinstallMod(self):
         if self.checkGameRunning():

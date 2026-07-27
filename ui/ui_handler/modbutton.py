@@ -91,6 +91,20 @@ class ModButton(QWidget):
             self.favoriteButton.setIcon(QIcon(":/icons/resources/icons/Star.png"))
         self.favoriteButton.setIconSize(QSize(18, 18))
 
+        # Update Tooltip with Replacements
+        from ..utils.lang_reader import get_cached_replacements
+        replacements = get_cached_replacements(self.modClass.hash)
+        if replacements:
+            tt = f"<b style='color: #42A5F5;'>{self.modClass.name}</b><br/><br/><b>Replaces:</b><ul style='margin-left: 15px; margin-top: 2px; margin-bottom: 2px;'>"
+            for r in replacements[:10]:
+                tt += f"<li>{r}</li>"
+            if len(replacements) > 10:
+                tt += f"<li><i>And {len(replacements) - 10} more...</i></li>"
+            tt += "</ul>"
+            self.setToolTip(tt)
+        else:
+            self.setToolTip(f"<b>{self.modClass.name}</b><br/>Author: {self.modClass.author}")
+
     def toggleFavorite(self):
         self.modClass.favorite = not self.modClass.favorite
         self.updateData()

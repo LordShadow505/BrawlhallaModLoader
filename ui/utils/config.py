@@ -89,3 +89,21 @@ class LoaderConfig:
     def nsfwFilter(self, value):
         self.data["nsfwFilter"] = value
         self._save()
+
+    @property
+    def presets(self):
+        return self.data.get("presets", {})
+
+    @presets.setter
+    def presets(self, value):
+        self.data["presets"] = value
+        self._save()
+
+    @property
+    def lastSelectedPreset(self):
+        return self.data.get("lastSelectedPreset", "")
+
+    @lastSelectedPreset.setter
+    def lastSelectedPreset(self, value):
+        self.data["lastSelectedPreset"] = value
+        self._save()

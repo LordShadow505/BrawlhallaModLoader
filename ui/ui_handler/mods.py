@@ -1,8 +1,10 @@
+import os
+import webbrowser
 from typing import List, Dict
 
-from PySide6.QtWidgets import QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QLabel
+from PySide6.QtWidgets import QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QComboBox, QInputDialog, QMessageBox, QDialog
 from PySide6.QtGui import QPixmap, QPaintEvent, QIcon, QCursor
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer, Signal, QObject
 
 from .modbutton import ModButton
 from .modclass import ModClass
@@ -14,6 +16,29 @@ from ..ui_sources.ui_mods_actions import Ui_ModsActions
 from ..utils.buttons import AddButtonWidthToTexSize
 from ..utils.layout import AddToFrame, ClearFrame
 from ..utils.buttongroup import ButtonGroup
+
+
+def get_tinted_svg_pixmap(svg_path: str, fill_color: str, size: int = 18) -> QPixmap:
+    if os.path.exists(svg_path):
+        try:
+            with open(svg_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            import re
+            content = re.sub(r'fill="[^"]*"', f'fill="{fill_color}"', content)
+            
+            from PySide6.QtSvg import QSvgRenderer
+            from PySide6.QtGui import QPainter, QImage
+            
+            renderer = QSvgRenderer(content.encode('utf-8'))
+            image = QImage(size, size, QImage.Format_ARGB32)
+            image.fill(Qt.transparent)
+            painter = QPainter(image)
+            renderer.render(painter)
+            painter.end()
+            return QPixmap.fromImage(image)
+        except Exception as e:
+            print(f"[SVG TINT ERROR] {e}")
+    return QIcon(svg_path).pixmap(size, size)
 
 
 # TODO: Add gif or video in previews
@@ -70,14 +95,54 @@ class NavigateButton(ButtonGroup):
         return bool(self.button.parent())
 
 
+
+
+
+class TagPillWidget(QWidget):
+    clicked = Signal(str)
+
+    def __init__(self, tag_name: str, bg_color: str, parent=None):
+        super().__init__(parent)
+        self.tag_name = tag_name
+        from PySide6.QtGui import QColor, QFont, QFontMetrics
+        self.bg_color = QColor(bg_color)
+        self.setCursor(Qt.PointingHandCursor)
+        
+        fm = QFontMetrics(QFont("Segoe UI", 8, QFont.Bold))
+        w = fm.horizontalAdvance(tag_name) + 16
+        self.setFixedSize(max(w, 36), 18)
+
+    def paintEvent(self, event):
+        from PySide6.QtGui import QPainter, QPainterPath, QColor, QFont
+        from PySide6.QtCore import QRectF
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, self.width(), self.height()), 9, 9)
+        
+        p.fillPath(path, self.bg_color)
+        
+        p.setPen(QColor("#FFFFFF"))
+        p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+        p.drawText(self.rect(), Qt.AlignCenter, self.tag_name)
+        p.end()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.tag_name)
+        super().mousePressEvent(event)
+
+
 class Mods(QWidget):
     defaultPreview = ":/images/resources/images/DefaultPreview.png"
     cachePreviews: Dict[str, QPixmap] = {}
     selectedModButton: ModButton = None
     mods: Dict[str, ModClass] = {}
     modsButtons: List[ModButton] = []
+    wikiPreviewSignal = Signal(QPixmap, str)
 
-    def __init__(self, installMethod, uninstallMethod, reinstallMethod, deleteMethod, reloadMethod, openFolderMethod, uninstallAllMethod, toggleFavoriteMethod, sortCallback):
+    def __init__(self, installMethod, uninstallMethod, reinstallMethod, deleteMethod, reloadMethod, openFolderMethod, uninstallAllMethod, toggleFavoriteMethod, sortCallback, savePresetMethod=None, deletePresetMethod=None, applyPresetMethod=None, editPresetMethod=None, reloadPresetMethod=None):
         super().__init__()
 
         self.ui = Ui_Mods()
@@ -110,31 +175,119 @@ class Mods(QWidget):
         self.body.leftPreview.clicked.connect(self.leftPreview)
         self.body.rightPreview.clicked.connect(self.rightPreview)
 
-        # Warning Notice
+        self.body.modTags.setOpenExternalLinks(False)
+        self.body.modTags.linkActivated.connect(self.onTagLinkClicked)
+
+        self.body.modDescription.setOpenExternalLinks(True)
+        self.body.modDescription.highlighted.connect(self.onReplacementHovered)
+        self.body.modDescription.viewport().installEventFilter(self)
+
+        # Native PySide6 Single Unified Wiki Image Preview Card Container
+        self.wikiPreviewCard = QFrame(None, Qt.ToolTip | Qt.FramelessWindowHint)
+        self.wikiPreviewCard.setStyleSheet("""
+            QFrame {
+                background-color: #15161A;
+                border: 1px solid #33343A;
+                border-radius: 8px;
+            }
+        """)
+        cardLayout = QVBoxLayout(self.wikiPreviewCard)
+        cardLayout.setContentsMargins(8, 8, 8, 8)
+        cardLayout.setSpacing(6)
+
+        self.wikiPreviewTitle = QLabel()
+        self.wikiPreviewTitle.setStyleSheet("color: #FFFFFF; font-size: 11px; font-weight: bold; background: transparent; border: none;")
+        self.wikiPreviewTitle.setAlignment(Qt.AlignCenter)
+        cardLayout.addWidget(self.wikiPreviewTitle)
+
+        self.wikiPreviewImageLabel = QLabel()
+        self.wikiPreviewImageLabel.setStyleSheet("background: transparent; border: none;")
+        self.wikiPreviewImageLabel.setAlignment(Qt.AlignCenter)
+        cardLayout.addWidget(self.wikiPreviewImageLabel)
+
+        self.wikiPreviewCard.hide()
+        self.wikiPreviewSignal.connect(self.showWikiPreviewCard)
+
+        icons_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "ui_sources", "resources", "icons"))
+        mod_warning_icon_path = os.path.join(icons_dir, "ModWarning.svg")
+
+        self.ui.modsList.setMaximumWidth(16777215)
+        self.ui.splitter.setStretchFactor(0, 1)
+        self.ui.splitter.setStretchFactor(1, 1)
+        self.ui.splitter.setSizes([425, 425])
+
+        # Skin Warning Notice (Coral #FF7043)
         self.warningFrame = QFrame()
-        self.warningFrame.setStyleSheet("background-color: #1D1E20; border-bottom: 1px solid #333333;")
+        self.warningFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
         warningLayout = QHBoxLayout(self.warningFrame)
-        warningLayout.setContentsMargins(10, 5, 10, 5)
+        warningLayout.setContentsMargins(10, 6, 10, 6)
         warningLayout.setSpacing(10)
 
         warningIconLabel = QLabel()
-        warningIconLabel.setPixmap(QIcon(":/icons/resources/icons/Warning.png").pixmap(16, 16))
+        warningIconLabel.setPixmap(get_tinted_svg_pixmap(mod_warning_icon_path, "#FF7043", 18))
+        warningIconLabel.setStyleSheet("background: transparent; border: none; padding: 0px;")
         warningLayout.addWidget(warningIconLabel)
 
         warningTextLabel = QLabel("Remember that any existing skin mod requires a PAID skin, check the REQUIREMENTS section in GameBanana to find out which skin it replaces.")
         warningTextLabel.setWordWrap(True)
-        warningTextLabel.setStyleSheet("color: #FF5252; font-size: 10px; font-weight: bold; border: none;")
+        warningTextLabel.setStyleSheet("color: #FF7043; font-size: 10px; font-weight: bold; border: none; background: transparent;")
         warningLayout.addWidget(warningTextLabel, 1)
 
-        self.ui.verticalLayout.insertWidget(0, self.warningFrame)
+        self.modDescriptionsAndActionsLayout.insertWidget(2, self.warningFrame)
+
+        # EX Mod Warning Notice (Gold/Amber #FFA500)
+        self.exWarningFrame = QFrame()
+        self.exWarningFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
+        exWarningLayout = QHBoxLayout(self.exWarningFrame)
+        exWarningLayout.setContentsMargins(10, 6, 10, 6)
+        exWarningLayout.setSpacing(10)
+
+        exWarningIconLabel = QLabel()
+        exWarningIconLabel.setPixmap(get_tinted_svg_pixmap(mod_warning_icon_path, "#FFA500", 18))
+        exWarningIconLabel.setStyleSheet("background: transparent; border: none; padding: 0px;")
+        exWarningLayout.addWidget(exWarningIconLabel)
+
+        exWarningTextLabel = QLabel(
+            "WARNING: This Mod is an EX-type mod. The official modloader may not support all features of this mod, "
+            "use the Unofficial Modloader to use it: "
+            "<a href=\"https://gamebanana.com/tools/20722\" style=\"color: #3498db; text-decoration: underline;\">https://gamebanana.com/tools/20722</a>"
+        )
+        exWarningTextLabel.setWordWrap(True)
+        exWarningTextLabel.setOpenExternalLinks(True)
+        exWarningTextLabel.setStyleSheet("color: #FFA500; font-size: 10px; font-weight: bold; border: none; background: transparent;")
+        exWarningLayout.addWidget(exWarningTextLabel, 1)
+
+        self.modDescriptionsAndActionsLayout.insertWidget(3, self.exWarningFrame)
+        self.exWarningFrame.hide()
+
+        # Replacements Notice Frame (Deep Blue #3e49bb)
+        self.replacementsFrame = QFrame()
+        self.replacementsFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
+        replacementsLayout = QHBoxLayout(self.replacementsFrame)
+        replacementsLayout.setContentsMargins(10, 6, 10, 6)
+        replacementsLayout.setSpacing(10)
+
+        replacementsIconLabel = QLabel()
+        replacementsIconLabel.setPixmap(get_tinted_svg_pixmap(mod_warning_icon_path, "#3e49bb", 18))
+        replacementsIconLabel.setStyleSheet("background: transparent; border: none; padding: 0px;")
+        replacementsLayout.addWidget(replacementsIconLabel)
+
+        self.replacementsTextLabel = QLabel()
+        self.replacementsTextLabel.setWordWrap(True)
+        self.replacementsTextLabel.setOpenExternalLinks(True)
+        self.replacementsTextLabel.linkHovered.connect(self.onReplacementHovered)
+        self.replacementsTextLabel.installEventFilter(self)
+        self.replacementsTextLabel.setStyleSheet("color: #FFFFFF; font-size: 10px; font-weight: bold; border: none; background: transparent;")
+        replacementsLayout.addWidget(self.replacementsTextLabel, 1)
+
+        self.modDescriptionsAndActionsLayout.insertWidget(4, self.replacementsFrame)
+        self.replacementsFrame.hide()
 
         modsListFrame = QFrame()
         layout = QVBoxLayout(modsListFrame)
         layout.setSpacing(0)
         layout.setContentsMargins(2, 5, 2, 5)
         self.modsList = QFrame()
-        self.ui.modsList.setMaximumWidth(528)
-        self.modsList.setMaximumWidth(528)
         layout2 = QVBoxLayout(self.modsList)
         layout2.setSpacing(1)
         layout2.setContentsMargins(0, 0, 0, 0)
@@ -178,7 +331,136 @@ class Mods(QWidget):
         self.ui.deleteAllMods.setToolTip("Delete all mods from list")
         
         from ..utils.config import LoaderConfig
-        
+
+        self.savePresetMethod = savePresetMethod
+        self.deletePresetMethod = deletePresetMethod
+        self.applyPresetMethod = applyPresetMethod
+        self.editPresetMethod = editPresetMethod
+        self.reloadPresetMethod = reloadPresetMethod
+
+        # Resolve icon paths
+        save_icon_path = os.path.join(icons_dir, "Save.svg")
+        edit_icon_path = os.path.join(icons_dir, "Edit.svg")
+        reload_icon_path = os.path.join(icons_dir, "Reload.svg")
+        delete_icon_path = os.path.join(icons_dir, "Delete.svg")
+        launch_icon_path = os.path.join(icons_dir, "Launch.svg")
+
+        # Dedicated Presets & Launch toolbar
+        self.presetsBarFrame = QFrame(self.ui.modsList)
+        self.presetsBarFrame.setMinimumSize(QSize(0, 36))
+        self.presetsBarFrame.setMaximumSize(QSize(16777215, 36))
+        self.presetsBarFrame.setStyleSheet("background-color: #111113; border-bottom: 1px solid #1E1F24;")
+        self.presetsBarLayout = QHBoxLayout(self.presetsBarFrame)
+        self.presetsBarLayout.setContentsMargins(4, 3, 4, 3)
+        self.presetsBarLayout.setSpacing(4)
+
+        # Presets Combo Box (Compact width capped at 130px)
+        self.presetCombo = QComboBox(self.presetsBarFrame)
+        self.presetCombo.setMinimumHeight(28)
+        self.presetCombo.setMaximumWidth(130)
+        self.presetCombo.setCursor(Qt.PointingHandCursor)
+        self.presetCombo.setStyleSheet("""
+            QComboBox {
+                background-color: #1A1B1F;
+                color: #FFFFFF;
+                border: 1px solid #33343A;
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-size: 11px;
+            }
+            QComboBox::drop-down { border: none; }
+            QComboBox QAbstractItemView {
+                background-color: #151518;
+                color: #FFFFFF;
+                selection-background-color: #24638C;
+            }
+        """)
+        self.presetCombo.setToolTip("Select or apply a mod preset profile")
+        self.presetCombo.currentIndexChanged.connect(self.onPresetComboChanged)
+        self.presetsBarLayout.addWidget(self.presetCombo, 0)
+
+        # Save Preset Button (Save.svg)
+        self.savePresetBtn = QPushButton(self.presetsBarFrame)
+        self.savePresetBtn.setFixedSize(QSize(28, 28))
+        self.savePresetBtn.setCursor(Qt.PointingHandCursor)
+        if os.path.exists(save_icon_path):
+            self.savePresetBtn.setIcon(QIcon(save_icon_path))
+        else:
+            self.savePresetBtn.setIcon(QIcon(":/icons/resources/icons/Save.png"))
+        self.savePresetBtn.setIconSize(QSize(16, 16))
+        self.savePresetBtn.setToolTip("Save Current Installed Mods as Preset")
+        self.savePresetBtn.setStyleSheet("QPushButton { background-color: #1A1B1F; border: 1px solid #33343A; border-radius: 8px; } QPushButton:hover { background-color: #2A2C32; }")
+        self.savePresetBtn.clicked.connect(self.onSavePresetClicked)
+        self.presetsBarLayout.addWidget(self.savePresetBtn)
+
+        # Edit/Rename Preset Button (Edit.svg)
+        self.editPresetBtn = QPushButton(self.presetsBarFrame)
+        self.editPresetBtn.setFixedSize(QSize(28, 28))
+        self.editPresetBtn.setCursor(Qt.PointingHandCursor)
+        if os.path.exists(edit_icon_path):
+            self.editPresetBtn.setIcon(QIcon(edit_icon_path))
+        self.editPresetBtn.setIconSize(QSize(16, 16))
+        self.editPresetBtn.setToolTip("Rename Selected Preset Profile")
+        self.editPresetBtn.setStyleSheet("QPushButton { background-color: #1A1B1F; border: 1px solid #33343A; border-radius: 8px; } QPushButton:hover { background-color: #2A2C32; }")
+        self.editPresetBtn.clicked.connect(self.onEditPresetClicked)
+        self.presetsBarLayout.addWidget(self.editPresetBtn)
+
+        # Reload/Sync Preset Button (Reload.svg)
+        self.reloadPresetBtn = QPushButton(self.presetsBarFrame)
+        self.reloadPresetBtn.setFixedSize(QSize(28, 28))
+        self.reloadPresetBtn.setCursor(Qt.PointingHandCursor)
+        if os.path.exists(reload_icon_path):
+            self.reloadPresetBtn.setIcon(QIcon(reload_icon_path))
+        self.reloadPresetBtn.setIconSize(QSize(16, 16))
+        self.reloadPresetBtn.setToolTip("Re-apply / Sync Selected Preset")
+        self.reloadPresetBtn.setStyleSheet("QPushButton { background-color: #1A1B1F; border: 1px solid #33343A; border-radius: 8px; } QPushButton:hover { background-color: #2A2C32; }")
+        self.reloadPresetBtn.clicked.connect(self.onReloadPresetClicked)
+        self.presetsBarLayout.addWidget(self.reloadPresetBtn)
+
+        # Delete Preset Button (Delete.svg)
+        self.deletePresetBtn = QPushButton(self.presetsBarFrame)
+        self.deletePresetBtn.setFixedSize(QSize(28, 28))
+        self.deletePresetBtn.setCursor(Qt.PointingHandCursor)
+        if os.path.exists(delete_icon_path):
+            self.deletePresetBtn.setIcon(QIcon(delete_icon_path))
+        else:
+            self.deletePresetBtn.setIcon(QIcon(":/icons/resources/icons/Delete.png"))
+        self.deletePresetBtn.setIconSize(QSize(16, 16))
+        self.deletePresetBtn.setToolTip("Delete Selected Preset Profile")
+        self.deletePresetBtn.setStyleSheet("QPushButton { background-color: #1A1B1F; border: 1px solid #33343A; border-radius: 8px; } QPushButton:hover { background-color: #3A1B1B; }")
+        self.deletePresetBtn.clicked.connect(self.onDeletePresetClicked)
+        self.presetsBarLayout.addWidget(self.deletePresetBtn)
+
+        # Launch Brawlhalla Button (Launch.svg)
+        self.launchBrawlhallaBtn = QPushButton("Launch Brawlhalla!", self.presetsBarFrame)
+        self.launchBrawlhallaBtn.setMinimumHeight(28)
+        self.launchBrawlhallaBtn.setCursor(Qt.PointingHandCursor)
+        if os.path.exists(launch_icon_path):
+            self.launchBrawlhallaBtn.setIcon(QIcon(launch_icon_path))
+        self.launchBrawlhallaBtn.setIconSize(QSize(16, 16))
+        self.launchBrawlhallaBtn.setToolTip("Launch Brawlhalla")
+        self.launchBrawlhallaBtn.setStyleSheet("""
+            QPushButton {
+                background-color: #2ECC71;
+                color: #FFFFFF;
+                font-weight: bold;
+                font-size: 11px;
+                border-radius: 8px;
+                padding: 4px 8px;
+                border: none;
+            }
+            QPushButton:hover { background-color: #27AE60; }
+            QPushButton:pressed { background-color: #1E8449; }
+        """)
+        self.launchBrawlhallaBtn.clicked.connect(lambda: webbrowser.open("steam://rungameid/291550"))
+        self.presetsBarLayout.addWidget(self.launchBrawlhallaBtn)
+
+        # Presets at Top (index 0), Search Bar Below Presets (index 1)
+        self.ui.verticalLayout.insertWidget(0, self.presetsBarFrame)
+        self.ui.verticalLayout.insertWidget(1, self.ui.searchFrame)
+
+        self.loadPresetsList()
+
         # Bottom left buttons Tooltips
         self.ui.modsSortButton.setToolTip("Sort Mods")
         self.ui.openModsFolderButton.setToolTip("Open Mods Folder")
@@ -198,6 +480,119 @@ class Mods(QWidget):
         self.nameSortReverse = False
         self.dateSortReverse = True
 
+    def loadPresetsList(self):
+        from ..utils.config import LoaderConfig
+        config = LoaderConfig()
+        if hasattr(self, 'presetCombo'):
+            self.presetCombo.blockSignals(True)
+            self.presetCombo.clear()
+            self.presetCombo.addItem("+ Add New Preset")
+            for name in config.presets.keys():
+                self.presetCombo.addItem(name)
+
+            last_preset = config.lastSelectedPreset
+            if last_preset and last_preset in config.presets:
+                idx = self.presetCombo.findText(last_preset)
+                if idx > 0:
+                    self.presetCombo.setCurrentIndex(idx)
+            else:
+                self.presetCombo.setCurrentIndex(0)
+            self.presetCombo.blockSignals(False)
+
+    def onPresetComboChanged(self, index):
+        from ..utils.config import LoaderConfig
+        config = LoaderConfig()
+        if index == 0:
+            self.promptNewPreset()
+        elif index > 0:
+            preset_name = self.presetCombo.itemText(index)
+            config.lastSelectedPreset = preset_name
+            if hasattr(self, 'applyPresetMethod') and self.applyPresetMethod:
+                self.applyPresetMethod(preset_name)
+
+    def promptNewPreset(self):
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle("Create New Mod Preset")
+        dialog.setLabelText("Enter a name for the new mod preset:")
+        dialog.setStyleSheet("""
+            QInputDialog { background-color: #141518; color: #FFFFFF; }
+            QLabel { color: #FFFFFF; font-size: 12px; font-weight: bold; }
+            QLineEdit { background-color: #1F2024; color: #FFFFFF; border: 1px solid #24638C; border-radius: 4px; padding: 6px; font-size: 12px; }
+            QPushButton { background-color: #24638C; color: #FFFFFF; border-radius: 4px; padding: 6px 14px; font-weight: bold; }
+            QPushButton:hover { background-color: #347BA9; }
+        """)
+        ok = dialog.exec()
+        name = dialog.textValue().strip()
+        if ok == QDialog.Accepted and name:
+            from ..utils.config import LoaderConfig
+            config = LoaderConfig()
+            if name in config.presets:
+                msgBox = QMessageBox(self)
+                msgBox.setWindowTitle("Overwrite Preset")
+                msgBox.setText(f"Preset '{name}' already exists. Do you want to overwrite it?")
+                msgBox.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+                msgBox.setStyleSheet("""
+                    QMessageBox { background-color: #141518; color: #FFFFFF; }
+                    QLabel { color: #FFFFFF; font-size: 12px; }
+                    QPushButton { background-color: #24638C; color: #FFFFFF; border-radius: 4px; padding: 5px 12px; }
+                """)
+                reply = msgBox.exec()
+                if reply != QMessageBox.Yes:
+                    return
+            if hasattr(self, 'savePresetMethod') and self.savePresetMethod:
+                self.savePresetMethod(name)
+
+    def onSavePresetClicked(self):
+        current_idx = self.presetCombo.currentIndex()
+        if current_idx > 0:
+            preset_name = self.presetCombo.currentText()
+            if hasattr(self, 'savePresetMethod') and self.savePresetMethod:
+                self.savePresetMethod(preset_name)
+        else:
+            self.promptNewPreset()
+
+    def onEditPresetClicked(self):
+        current = self.presetCombo.currentText()
+        if self.presetCombo.currentIndex() > 0 and current:
+            dialog = QInputDialog(self)
+            dialog.setWindowTitle("Rename Preset")
+            dialog.setLabelText(f"Enter new name for preset '{current}':")
+            dialog.setTextValue(current)
+            dialog.setStyleSheet("""
+                QInputDialog { background-color: #141518; color: #FFFFFF; }
+                QLabel { color: #FFFFFF; font-size: 12px; font-weight: bold; }
+                QLineEdit { background-color: #1F2024; color: #FFFFFF; border: 1px solid #24638C; border-radius: 4px; padding: 6px; font-size: 12px; }
+                QPushButton { background-color: #24638C; color: #FFFFFF; border-radius: 4px; padding: 6px 14px; font-weight: bold; }
+                QPushButton:hover { background-color: #347BA9; }
+            """)
+            ok = dialog.exec()
+            new_name = dialog.textValue().strip()
+            if ok == QDialog.Accepted and new_name and new_name != current:
+                if hasattr(self, 'editPresetMethod') and self.editPresetMethod:
+                    self.editPresetMethod(current, new_name)
+
+    def onReloadPresetClicked(self):
+        current = self.presetCombo.currentText()
+        if self.presetCombo.currentIndex() > 0 and current:
+            if hasattr(self, 'reloadPresetMethod') and self.reloadPresetMethod:
+                self.reloadPresetMethod(current)
+
+    def onDeletePresetClicked(self):
+        current = self.presetCombo.currentText()
+        if self.presetCombo.currentIndex() > 0 and current:
+            msgBox = QMessageBox(self)
+            msgBox.setWindowTitle("Delete Preset")
+            msgBox.setText(f"Are you sure you want to delete preset '{current}'?")
+            msgBox.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+            msgBox.setStyleSheet("""
+                QMessageBox { background-color: #141518; color: #FFFFFF; }
+                QLabel { color: #FFFFFF; font-size: 12px; }
+                QPushButton { background-color: #24638C; color: #FFFFFF; border-radius: 4px; padding: 5px 12px; }
+            """)
+            reply = msgBox.exec()
+            if reply == QMessageBox.Yes and hasattr(self, 'deletePresetMethod') and self.deletePresetMethod:
+                self.deletePresetMethod(current)
+
         self.setPreviewsPaths([self.defaultPreview])
 
     def loadPreview(self, pixmap: QPixmap):
@@ -205,26 +600,101 @@ class Mods(QWidget):
         self.body.modPreview.setPixmap(pixmap)
         self.onResize()
 
+    def onReplacementHovered(self, url):
+        url_str = url.toString() if hasattr(url, 'toString') else str(url or "")
+        if url_str and "brawlhalla.wiki.gg/wiki/" in url_str:
+            slug = url_str.split("brawlhalla.wiki.gg/wiki/")[-1].split("#")[0]
+            clean_name = slug.replace("_", " ")
+
+            import threading
+            threading.Thread(target=self._fetch_and_show_wiki_preview, args=(slug, clean_name), daemon=True).start()
+        else:
+            self.wikiPreviewCard.hide()
+
+    def _fetch_and_show_wiki_preview(self, slug: str, clean_name: str):
+        import requests
+        from PySide6.QtGui import QImage, QPixmap
+
+        cache_dir = os.path.join(os.environ.get("APPDATA", ""), "BModLoader", "wiki_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_file = os.path.join(cache_dir, f"{slug}.png")
+
+        dataData = None
+        if os.path.exists(cache_file) and os.path.getsize(cache_file) > 100:
+            try:
+                with open(cache_file, "rb") as f:
+                    dataData = f.read()
+            except: pass
+
+        if not dataData:
+            thumb_url = f"https://brawlhalla.wiki.gg/images/thumb/{slug}.png/150px-{slug}.png"
+            full_url = f"https://brawlhalla.wiki.gg/images/{slug}.png"
+            for url in [thumb_url, full_url]:
+                try:
+                    r = requests.get(url, timeout=2)
+                    if r.status_code == 200 and len(r.content) > 100:
+                        dataData = r.content
+                        with open(cache_file, "wb") as f:
+                            f.write(dataData)
+                        break
+                except: pass
+
+        if dataData:
+            img = QImage()
+            if img.loadFromData(dataData):
+                pixmap = QPixmap.fromImage(img).scaled(230, 230, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.wikiPreviewSignal.emit(pixmap, clean_name)
+
+    def showWikiPreviewCard(self, pixmap: QPixmap, clean_name: str):
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QCursor
+        self.wikiPreviewTitle.setText(clean_name)
+        self.wikiPreviewImageLabel.setPixmap(pixmap)
+        self.wikiPreviewCard.adjustSize()
+        card_h = self.wikiPreviewCard.height()
+        pos = QCursor.pos() + QPoint(12, -card_h - 6)
+        self.wikiPreviewCard.move(pos)
+        self.wikiPreviewCard.show()
+        self.wikiPreviewCard.raise_()
+
+    def eventFilter(self, watched, event):
+        if hasattr(self, 'body') and hasattr(self.body, 'modDescription') and (watched == self.body.modDescription.viewport() or (hasattr(self, 'replacementsTextLabel') and watched == self.replacementsTextLabel)):
+            if event.type() in (QEvent.Leave, QEvent.FocusOut):
+                if hasattr(self, 'wikiPreviewCard'):
+                    self.wikiPreviewCard.hide()
+        return super().eventFilter(watched, event)
+
+    def onTagButtonClicked(self, tag_name: str):
+        self.ui.searchArea.setText(tag_name)
+        self.searchEvent(tag_name)
+
+    def onTagLinkClicked(self, link: str):
+        if link.startswith("tag:"):
+            tag_name = link[4:]
+            self.onTagButtonClicked(tag_name)
+
     def searchEvent(self, text):
         if not text:
             displayModButtons = self.modsButtons
 
         else:
-            text = text.casefold()
+            text = text.casefold().strip()
 
-            if len(text.split(" ")) == 1:
-                text = f" {text}"
+            from ..utils.tags_helper import auto_detect_tags
+            displayModButtons = []
+            for modButton in self.modsButtons:
+                replacements = self.getModReplacements(modButton.modClass)
+                auto_tags = auto_detect_tags(modButton.modClass, replacements)
+                modButton.modClass.tags = auto_tags
+                
+                name_match = text in modButton.modClass.name.lower()
+                author_match = text in modButton.modClass.author.lower()
+                version_match = modButton.modClass.gameVersion.lower().startswith(text)
+                tag_match = any(text in t.lower() for t in auto_tags)
+                rep_match = any(text in r.lower() for r in replacements)
 
-            displayModButtons = [
-                modButton
-                for modButton in self.modsButtons
-                if any([
-                    text in f" {modButton.modClass.name.lower()}",
-                    text in f" {modButton.modClass.author.lower()}",
-                    modButton.modClass.gameVersion.startswith(text.strip()),
-                    any([tag.casefold().lower().startswith(text.strip()) for tag in modButton.modClass.tags])
-                ])
-            ]
+                if name_match or author_match or version_match or tag_match or rep_match:
+                    displayModButtons.append(modButton)
 
         for modButton in self.modsButtons:
             modButton.remove()
@@ -359,6 +829,112 @@ class Mods(QWidget):
 
         self.loadPreview(self.previews[0])
 
+    def getModReplacements(self, modClass: ModClass) -> List[str]:
+        from ..utils.config import LoaderConfig
+        from ..utils.lang_reader import get_global_lang_reader, get_cached_replacements, set_cached_replacements
+
+        # Hash-based cache: compute once per mod, reuse on every select click
+        cached = get_cached_replacements(modClass.hash)
+        if cached is not None:
+            return cached
+
+        config = LoaderConfig()
+        bh_path = config.brawlhallaPath
+        if not bh_path or not os.path.exists(os.path.join(bh_path, "languages")):
+            possible_path = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Brawlhalla"
+            if os.path.exists(os.path.join(possible_path, "languages")):
+                bh_path = possible_path
+
+        lang_reader = None
+        if bh_path and os.path.exists(os.path.join(bh_path, "languages")):
+            lang_reader = get_global_lang_reader(os.path.join(bh_path, "languages"))
+
+        # Sprite part_type prefix -> weapon type display name
+        # Keys are the exact first segment after stripping "a_" prefix from symbolclass names
+        WEAPON_PREFIXES = {
+            'WeaponHammer': 'Hammer',
+            'WeaponHammerShort': 'Hammer',
+            'WeaponRocketLance': 'Rocket Lance',
+            'WeaponRocketLanceShort': 'Rocket Lance',
+            'WeaponSword': 'Sword',
+            'WeaponSwordShort': 'Sword',
+            'WeaponSpear': 'Spear',
+            'WeaponSpearShort': 'Spear',
+            'WeaponPistol': 'Blasters',
+            'WeaponPistolShort': 'Blasters',
+            'WeaponKatar': 'Katars',
+            'WeaponKatarShort': 'Katars',
+            'WeaponAxe': 'Axe',
+            'WeaponAxeShort': 'Axe',
+            'WeaponBow': 'Bow',
+            'WeaponBowShort': 'Bow',
+            'WeaponGloves': 'Gauntlets',
+            'WeaponGlovesShort': 'Gauntlets',
+            'WeaponFists': 'Gauntlets',
+            'WeaponFistsShort': 'Gauntlets',
+            'WeaponScythe': 'Scythe',
+            'WeaponScytheShort': 'Scythe',
+            'WeaponCannon': 'Cannon',
+            'WeaponCannonShort': 'Cannon',
+            'WeaponOrb': 'Orb',
+            'WeaponOrbShort': 'Orb',
+            'WeaponChakram': 'Orb',
+            'WeaponGreatsword': 'Greatsword',
+            'WeaponGreatswordShort': 'Greatsword',
+            'WeaponGreat': 'Greatsword',
+            'WeaponBoots': 'Battle Boots',
+            'WeaponBootsShort': 'Battle Boots',
+        }
+
+        replacements = []
+        seen = set()
+
+        sprites_to_process = modClass.spriteNames if hasattr(modClass, 'spriteNames') and modClass.spriteNames else []
+
+        if not sprites_to_process:
+            for swf in modClass.swfNames:
+                base = os.path.basename(swf)
+                if any(base.lower().startswith(p) for p in ["bones", "sfx", "ui"]):
+                    continue
+                clean = base.replace(".swf", "").replace(".SWF", "").replace("Gfx_", "").replace("gfx_", "")
+                if clean:
+                    sprites_to_process.append(f"a_Torso_{clean}")
+
+        for sprite in sprites_to_process:
+            clean = sprite
+            if clean.startswith("a_"):
+                clean = clean[2:]
+            
+            parts = clean.split("_")
+            if len(parts) < 2:
+                continue
+
+            part_type = parts[0]
+            code = "_".join(parts[1:])
+
+            if not code or code.isdigit() or len(code) < 2:
+                continue
+
+            weapon_type = None
+            for w_prefix, w_name in WEAPON_PREFIXES.items():
+                if part_type == w_prefix or part_type.startswith(w_prefix):
+                    weapon_type = w_name
+                    break
+
+            item = None
+            if lang_reader:
+                if weapon_type:
+                    item = lang_reader.resolve_weapon(code, weapon_type)
+                else:
+                    item = lang_reader.resolve_costume(code)
+
+            if item and item not in seen:
+                seen.add(item)
+                replacements.append(item)
+
+        set_cached_replacements(modClass.hash, replacements)
+        return replacements
+
     def updateData(self):
         modClass = self.selectedModButton.modClass
 
@@ -376,15 +952,18 @@ class Mods(QWidget):
         elif modClass.modFileExist:
             AddToFrame(self.modsActions.mainFrame, self.modsActions.install)
 
-        #if modClass.modFileExist:
         AddToFrame(self.modsActions.mainFrame, self.modsActions.deleteMod)
 
         import re
         is_ex = bool(re.search(r'\bEX\b', modClass.name, re.IGNORECASE))
         if is_ex:
             self.body.modName.setStyleSheet("color: #FFA500;")
+            if hasattr(self, 'exWarningFrame'):
+                self.exWarningFrame.show()
         else:
             self.body.modName.setStyleSheet("color: #eeeeee;")
+            if hasattr(self, 'exWarningFrame'):
+                self.exWarningFrame.hide()
 
         self.setPreviewsPaths(modClass.previewsPaths)
         self.body.modName.setText(modClass.name)
@@ -393,21 +972,102 @@ class Mods(QWidget):
         self.body.modVersion.setText("Version: " + modClass.version)
 
         desc = modClass.description or ""
-        if is_ex:
-            ex_warning_html = (
-                '<p style="color: #FFA500; font-weight: bold; background-color: #2D1E00; padding: 8px; border: 1px solid #FF8C00; border-radius: 4px;">'
-                'WARNING: This Mod is an EX-type mod. The official modloader may not support all features of this mod, '
-                'use the Unofficial Modloader to use it: '
-                '<a href="https://gamebanana.com/tools/20722" style="color: #3498db; text-decoration: underline;">https://gamebanana.com/tools/20722</a>'
-                '</p><br/>'
-            )
-            if "<body>" in desc:
-                desc = desc.replace("<body>", "<body>" + ex_warning_html)
-            else:
-                desc = ex_warning_html + desc
+        replacements = self.getModReplacements(modClass)
+
+        if replacements:
+            total_count = len(replacements)
+            display_items = replacements[:15]
+            
+            replaces_html = "<b style='color: #3e49bb; font-size: 11px;'>This mod replaces:</b>"
+            replaces_html += "<ul style='margin-top: 4px; margin-bottom: 4px; padding-left: 18px; color: #FFFFFF; font-size: 11px;'>"
+            for item in display_items:
+                clean_name = item.split('(')[0].strip()
+                slug = clean_name.replace(' ', '_').replace("'", "%27")
+                wiki_url = f"https://brawlhalla.wiki.gg/wiki/{slug}"
+                replaces_html += f"<li style='margin-bottom: 3px; color: #FFFFFF;'><a href='{wiki_url}' style='color: #FFFFFF; text-decoration: underline;'>{item}</a></li>"
+            replaces_html += "</ul>"
+
+            if total_count > 15:
+                extra = total_count - 15
+                replaces_html += f"<p style='color: #9E9E9E; font-size: 11px; font-style: italic; margin-left: 5px;'>And {extra} More...</p>"
+            
+            if hasattr(self, 'replacementsTextLabel'):
+                self.replacementsTextLabel.setText(replaces_html)
+            if hasattr(self, 'replacementsFrame'):
+                self.replacementsFrame.show()
+        else:
+            if hasattr(self, 'replacementsFrame'):
+                self.replacementsFrame.hide()
 
         self.body.modDescription.setText(desc)
-        self.body.modTags.setText("Tags: " + ", ".join(modClass.tags))
+
+        from ..utils.tags_helper import auto_detect_tags
+        auto_tags = auto_detect_tags(modClass, replacements)
+        modClass.tags = auto_tags
+        self.updateTagPills(auto_tags)
+
+    def updateTagPills(self, tags: List[str]):
+        from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel
+        from ..utils.tags_helper import get_category_color, normalize_tag
+
+        if not hasattr(self, 'tagsContainerFrame'):
+            self.tagsContainerFrame = QFrame()
+            self.tagsContainerFrame.setStyleSheet("background: transparent; border: none; margin: 4px 0px;")
+            self.tagsContainerLayout = QVBoxLayout(self.tagsContainerFrame)
+            self.tagsContainerLayout.setContentsMargins(0, 0, 0, 0)
+            self.tagsContainerLayout.setSpacing(6)
+            self.modDescriptionsAndActionsLayout.insertWidget(1, self.tagsContainerFrame)
+            self.body.modTags.hide()
+
+        while self.tagsContainerLayout.count():
+            item = self.tagsContainerLayout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        if not tags:
+            return
+
+        seen_norm = set()
+        clean_tags = []
+        for t in tags:
+            nt = normalize_tag(t)
+            if nt.lower() not in seen_norm:
+                clean_tags.append(nt)
+                seen_norm.add(nt.lower())
+
+        display_tags = clean_tags[:10]
+
+        row_frame = None
+        row_layout = None
+
+        for i, tag in enumerate(display_tags):
+            if i % 4 == 0:
+                if row_layout:
+                    row_layout.addStretch()
+                row_frame = QFrame()
+                row_frame.setStyleSheet("background: transparent; border: none;")
+                row_layout = QHBoxLayout(row_frame)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(6)
+                self.tagsContainerLayout.addWidget(row_frame)
+
+            bg_color = get_category_color(tag)
+            btn = TagPillWidget(tag, bg_color)
+            btn.clicked.connect(self.onTagButtonClicked)
+            row_layout.addWidget(btn)
+
+        if row_layout:
+            row_layout.addStretch()
+
+        if len(clean_tags) > 10:
+            extra = len(clean_tags) - 10
+            lbl = QLabel(f"and {extra} more...")
+            lbl.setStyleSheet("color: #888888; font-size: 11px; font-style: italic; background: transparent; border: none;")
+            if row_layout:
+                row_layout.addWidget(lbl)
+
+        self.tagsContainerLayout.addStretch()
 
     def selectMod(self, modClass: ModClass):
         for modButton in self.modsButtons:
@@ -441,7 +1101,10 @@ class Mods(QWidget):
                currentVersion: bool,
                modFileExist: bool,
                date: float = 0.0,
-               favorite: bool = False):
+               favorite: bool = False,
+               swfNames: List[str] = None,
+               fileNames: List[str] = None,
+               spriteNames: List[str] = None):
 
         for path in previewsPaths:
             self.cachePreview(path)
@@ -459,7 +1122,14 @@ class Mods(QWidget):
                        currentVersion,
                        modFileExist,
                        date,
-                       favorite)
+                       favorite,
+                       swfNames,
+                       fileNames,
+                       spriteNames)
+
+        from ..utils.tags_helper import auto_detect_tags
+        replacements = self.getModReplacements(mod)
+        mod.tags = auto_detect_tags(mod, replacements)
 
         self.mods[hash] = mod
         self.addModButton(mod)

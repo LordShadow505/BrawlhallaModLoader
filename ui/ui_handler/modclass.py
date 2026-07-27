@@ -18,7 +18,10 @@ class ModClass:
                  currentVersion: bool,
                  modFileExist: bool,
                  date: float = 0.0,
-                 favorite: bool = False
+                 favorite: bool = False,
+                 swfNames: List[str] = None,
+                 fileNames: List[str] = None,
+                 spriteNames: List[str] = None
                  ):
         self.gameVersion = gameVersion or ""
         self.name = name or ""
@@ -34,3 +37,6 @@ class ModClass:
         self.modFileExist = modFileExist
         self.date = date
         self.favorite = favorite
+        self.swfNames = swfNames or []
+        self.fileNames = fileNames or []
+        self.spriteNames = spriteNames or []
