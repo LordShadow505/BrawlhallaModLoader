@@ -30,7 +30,12 @@ class LoaderConfig:
             self._save()
 
     def _save(self):
+        try:
+            from main import FlowTracer
+            FlowTracer.log("LoaderConfig._save", f"modGroups keys: {list(self.data.get('modGroups', {}).keys())}")
+        except Exception: pass
         os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+
         temp_path = self.config_path + ".tmp"
         try:
             with open(temp_path, "w") as f:
@@ -107,3 +112,22 @@ class LoaderConfig:
     def lastSelectedPreset(self, value):
         self.data["lastSelectedPreset"] = value
         self._save()
+
+    @property
+    def modGroups(self):
+        return self.data.get("modGroups", {})
+
+    @modGroups.setter
+    def modGroups(self, value):
+        self.data["modGroups"] = value
+        self._save()
+
+    @property
+    def modGroupAssignments(self):
+        return self.data.get("modGroupAssignments", {})
+
+    @modGroupAssignments.setter
+    def modGroupAssignments(self, value):
+        self.data["modGroupAssignments"] = value
+        self._save()
+

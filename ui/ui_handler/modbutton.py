@@ -1,6 +1,7 @@
+import os
 import re
 
-from PySide6.QtWidgets import QWidget, QScrollArea, QPushButton, QHBoxLayout
+from PySide6.QtWidgets import QWidget, QScrollArea, QPushButton, QHBoxLayout, QFrame, QLabel, QCheckBox
 from PySide6.QtGui import QFontMetrics, Qt, QPixmap, QIcon, QCursor
 from PySide6.QtCore import QEvent, QSize
 
@@ -17,11 +18,49 @@ class ModButton(QWidget):
         self.modClass = modClass
         self.method = method
         self.favoriteMethod = favoriteMethod
+        self.groupId = ""
+        self.groupColor = ""
 
         super().__init__()
 
         self.ui = Ui_ModButton()
         self.ui.setupUi(self)
+
+        # Vertical group color strip (far left)
+        self.groupStrip = QFrame()
+        self.groupStrip.setFixedSize(5, 36)
+        self.groupStrip.setStyleSheet("background-color: transparent; border-radius: 2px;")
+
+        icons_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "ui_sources", "resources", "icons")).replace("\\", "/")
+        cb_unchecked = f"{icons_dir}/CheckBox.svg"
+        cb_checked = f"{icons_dir}/CheckBox_Mark.svg"
+
+        # Selection CheckBox for multi-selection moving
+        self.checkBox = QCheckBox()
+        self.checkBox.setFixedSize(QSize(18, 18))
+        self.checkBox.setCursor(QCursor(Qt.PointingHandCursor))
+        self.checkBox.setToolTip("Select mod")
+        self.checkBox.setStyleSheet(f"""
+            QCheckBox {{
+                spacing: 0px;
+                background: transparent;
+            }}
+            QCheckBox::indicator {{
+                width: 18px;
+                height: 18px;
+                background: transparent;
+                border: none;
+            }}
+            QCheckBox::indicator:unchecked {{
+                image: url("{cb_unchecked}");
+            }}
+            QCheckBox::indicator:checked {{
+                image: url("{cb_checked}");
+            }}
+        """)
+
+        self.checkBox.hide()
+
 
         # Favorite button
         self.favoriteButton = QPushButton()
@@ -31,7 +70,6 @@ class ModButton(QWidget):
         self.favoriteButton.clicked.connect(self.toggleFavorite)
         
         # Preview Container (Fixed width to avoid shifting status icons)
-        from PySide6.QtWidgets import QFrame
         self.previewContainer = QFrame()
         self.previewContainer.setFixedWidth(74) # 64px + 10px margin
         self.previewContainer.setStyleSheet("background-color: transparent; border: none;")
@@ -40,20 +78,21 @@ class ModButton(QWidget):
         previewLayout.setSpacing(0)
 
         # List Preview Image
-        from PySide6.QtWidgets import QLabel
         self.listPreviewLabel = QLabel()
         self.listPreviewLabel.setFixedSize(QSize(64, 36))
         self.listPreviewLabel.setAlignment(Qt.AlignCenter)
         self.listPreviewLabel.setStyleSheet("background-color: #000; border-radius: 4px; border: 1px solid #222;")
         previewLayout.addWidget(self.listPreviewLabel)
         
-        # Insert into layout
-        self.ui.horizontalLayout_2.insertWidget(0, self.favoriteButton)
-        self.ui.horizontalLayout_2.insertSpacing(1, 6) # Margin between star and preview container
-        self.ui.horizontalLayout_2.insertWidget(2, self.previewContainer)
+        # Insert elements into horizontal layout
+        self.ui.horizontalLayout_2.insertWidget(0, self.groupStrip)
+        self.ui.horizontalLayout_2.insertWidget(1, self.checkBox)
+        self.ui.horizontalLayout_2.insertWidget(2, self.favoriteButton)
+        self.ui.horizontalLayout_2.insertSpacing(3, 4) # Margin between star and preview container
+        self.ui.horizontalLayout_2.insertWidget(4, self.previewContainer)
         
         # Increase right margin to prevent status icon from being cut off
-        self.ui.horizontalLayout_2.setContentsMargins(7, 0, 15, 0)
+        self.ui.horizontalLayout_2.setContentsMargins(4, 0, 10, 0)
 
         self.updateData()
         self.updateListPreview()
@@ -61,6 +100,32 @@ class ModButton(QWidget):
         self.ui.background.installEventFilter(self)
 
         self.buttons.append(self)
+
+    def isChecked(self) -> bool:
+        return self.checkBox.isChecked()
+
+    def setChecked(self, val: bool):
+        self.checkBox.setChecked(val)
+
+    def showCheckBox(self, visible: bool):
+        if visible:
+            self.checkBox.show()
+        else:
+            self.checkBox.hide()
+            self.checkBox.setChecked(False)
+
+
+    def setGroup(self, group_id: str, group_color: str):
+        self.groupId = group_id or ""
+        self.groupColor = group_color or ""
+        if self.groupColor:
+            self.groupStrip.setStyleSheet(f"background-color: {self.groupColor}; border-radius: 2px;")
+            self.groupStrip.show()
+        else:
+            self.groupStrip.setStyleSheet("background-color: transparent;")
+            self.groupStrip.hide()
+
+
 
     def updateData(self):
         self.ui.modName.setText(self.modClass.name)

@@ -133,11 +133,21 @@ class SettingsFrame(QFrame):
         nsfw_lbl.setStyleSheet("color: #aaaaaa; font-size: 9pt;")
         nsfw_row.addWidget(nsfw_lbl)
         
+        icons_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "ui_sources", "resources", "icons")).replace("\\", "/")
+        cb_unchecked = f"{icons_dir}/CheckBox.svg"
+        cb_checked = f"{icons_dir}/CheckBox_Mark.svg"
+
         from PySide6.QtWidgets import QCheckBox
         self.nsfwCheckBox = QCheckBox("Enable NSFW Filter (Blur Sensitive Media)")
         self.nsfwCheckBox.setChecked(self.config.nsfwFilter)
-        self.nsfwCheckBox.setStyleSheet("QCheckBox { color: #eeeeee; font-size: 9pt; font-weight: bold; } QCheckBox::indicator { width: 16px; height: 16px; }")
+        self.nsfwCheckBox.setStyleSheet(f"""
+            QCheckBox {{ color: #eeeeee; font-size: 9pt; font-weight: bold; spacing: 6px; }}
+            QCheckBox::indicator {{ width: 18px; height: 18px; background: transparent; border: none; }}
+            QCheckBox::indicator:unchecked {{ image: url("{cb_unchecked}"); }}
+            QCheckBox::indicator:checked {{ image: url("{cb_checked}"); }}
+        """)
         self.nsfwCheckBox.stateChanged.connect(lambda: setattr(self, 'hasUnsavedChanges', True))
+
         nsfw_row.addWidget(self.nsfwCheckBox)
         nsfw_row.addStretch()
         self.card3.layout().addLayout(nsfw_row)

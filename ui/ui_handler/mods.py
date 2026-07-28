@@ -1,6 +1,7 @@
 import os
+import shutil
 import webbrowser
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
 from PySide6.QtWidgets import QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QComboBox, QInputDialog, QMessageBox, QDialog
 from PySide6.QtGui import QPixmap, QPaintEvent, QIcon, QCursor
@@ -39,9 +40,6 @@ def get_tinted_svg_pixmap(svg_path: str, fill_color: str, size: int = 18) -> QPi
         except Exception as e:
             print(f"[SVG TINT ERROR] {e}")
     return QIcon(svg_path).pixmap(size, size)
-
-
-# TODO: Add gif or video in previews
 
 
 class NavigateButton(ButtonGroup):
@@ -95,9 +93,6 @@ class NavigateButton(ButtonGroup):
         return bool(self.button.parent())
 
 
-
-
-
 class TagPillWidget(QWidget):
     clicked = Signal(str)
 
@@ -142,14 +137,25 @@ class Mods(QWidget):
     modsButtons: List[ModButton] = []
     wikiPreviewSignal = Signal(QPixmap, str, str)
 
-    def __init__(self, installMethod, uninstallMethod, reinstallMethod, deleteMethod, reloadMethod, openFolderMethod, uninstallAllMethod, toggleFavoriteMethod, sortCallback, savePresetMethod=None, deletePresetMethod=None, applyPresetMethod=None, editPresetMethod=None, reloadPresetMethod=None):
+    def __init__(self, installMethod, uninstallMethod, reinstallMethod, deleteMethod, reloadMethod, openFolderMethod, uninstallAllMethod, toggleFavoriteMethod, sortCallback, savePresetMethod=None, deletePresetMethod=None, applyPresetMethod=None, editPresetMethod=None, reloadPresetMethod=None, modsPath: str = "", controllerGetter=None, bulkInstallMethod=None, bulkUninstallMethod=None):
         super().__init__()
+
+        self.modsPath = modsPath
+        self.controllerGetter = controllerGetter
+        self.reloadMethod = reloadMethod
+        self.bulkInstallMethod = bulkInstallMethod
+        self.bulkUninstallMethod = bulkUninstallMethod
+        self.modGroupsWidgets: Dict[str, QWidget] = {}
+        self.currentSortField = "Name"
+        self.currentSortReverse = False
+
 
         self.active_hover_slug = None
         self.ui = Ui_Mods()
         self.ui.setupUi(self)
         self.toggleFavoriteMethod = toggleFavoriteMethod
         self.sortCallback = sortCallback
+
 
         self.setStyleSheet("""
             QToolTip {
@@ -217,6 +223,88 @@ class Mods(QWidget):
         self.ui.splitter.setStretchFactor(0, 1)
         self.ui.splitter.setStretchFactor(1, 1)
         self.ui.splitter.setSizes([425, 425])
+
+        # Pinned Selection Banner Frame (Fixed between Search Bar and Scroll Area)
+        self.selectionBannerFrame = QFrame(self.ui.modsList)
+        self.selectionBannerFrame.setObjectName("selectionBannerFrame")
+        self.selectionBannerFrame.setFixedHeight(42)
+        self.selectionBannerFrame.setStyleSheet("""
+            QFrame#selectionBannerFrame {
+                background-color: #191A1E;
+                border: 1px solid #2B2C30;
+                border-radius: 6px;
+                margin: 4px 6px;
+            }
+        """)
+        bannerLayout = QHBoxLayout(self.selectionBannerFrame)
+        bannerLayout.setContentsMargins(12, 4, 12, 4)
+        bannerLayout.setSpacing(10)
+
+        self.selectionLabel = QLabel("Select mods to move")
+        self.selectionLabel.setStyleSheet("color: #FFFFFF; font-size: 11px; font-weight: bold; border: none; background: transparent;")
+        bannerLayout.addWidget(self.selectionLabel, 1)
+
+        self.confirmMoveBtn = QPushButton("Move to...")
+        self.confirmMoveBtn.setObjectName("confirmMoveBtn")
+        self.confirmMoveBtn.setCursor(Qt.PointingHandCursor)
+        self.confirmMoveBtn.setStyleSheet("""
+            QPushButton#confirmMoveBtn {
+                background-color: #43C15F !important;
+                color: #FFFFFF !important;
+                font-weight: bold;
+                font-size: 11px;
+                border-radius: 6px;
+                padding: 6px 16px;
+                border: none;
+            }
+            QPushButton#confirmMoveBtn:hover {
+                background-color: #4BD469 !important;
+            }
+        """)
+        self.confirmMoveBtn.clicked.connect(self.onMoveToClicked)
+        bannerLayout.addWidget(self.confirmMoveBtn)
+
+
+        self.cancelMoveBtn = QPushButton("Cancel")
+        self.cancelMoveBtn.setObjectName("cancelMoveBtn")
+        self.cancelMoveBtn.setCursor(Qt.PointingHandCursor)
+        self.cancelMoveBtn.setStyleSheet("""
+            QPushButton#cancelMoveBtn {
+                background-color: #23242A !important;
+                color: #CCCCCC !important;
+                font-weight: bold;
+                font-size: 11px;
+                border-radius: 6px;
+                padding: 6px 12px;
+                border: 1px solid #3A3C4A;
+            }
+            QPushButton#cancelMoveBtn:hover {
+                background-color: #2D2E38 !important;
+                color: #FFFFFF !important;
+            }
+        """)
+        self.cancelMoveBtn.clicked.connect(self.exitSelectionMode)
+        bannerLayout.addWidget(self.cancelMoveBtn)
+
+        self.ui.verticalLayout.insertWidget(1, self.selectionBannerFrame)
+        self.selectionBannerFrame.hide()
+
+
+        self.pending_target_group_id = None
+        self.pending_target_group_name = None
+
+        modsListFrame = QFrame()
+        layout = QVBoxLayout(modsListFrame)
+        layout.setSpacing(2)
+        layout.setContentsMargins(2, 5, 2, 5)
+
+        self.modsList = QFrame()
+        layout2 = QVBoxLayout(self.modsList)
+        layout2.setSpacing(1)
+        layout2.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.modsList, 0, Qt.AlignTop)
+
+        self.ui.scrollModsList.setWidget(modsListFrame)
 
         # Skin Warning Notice (Coral #FF7043)
         self.warningFrame = QFrame()
@@ -305,14 +393,20 @@ class Mods(QWidget):
 
         modsListFrame = QFrame()
         layout = QVBoxLayout(modsListFrame)
-        layout.setSpacing(0)
+        layout.setSpacing(2)
         layout.setContentsMargins(2, 5, 2, 5)
+
+        self.pending_target_group_id = None
+        self.pending_target_group_name = None
+
         self.modsList = QFrame()
         layout2 = QVBoxLayout(self.modsList)
         layout2.setSpacing(1)
         layout2.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.modsList, 0, Qt.AlignTop)
+
         self.ui.scrollModsList.setWidget(modsListFrame)
+
 
         self.resizeEvent = self.onResize
         self.origScrollModsListResizeEvent = self.ui.scrollModsList.resizeEvent
@@ -347,10 +441,42 @@ class Mods(QWidget):
         self.ui.horizontalLayout_4.insertWidget(2, self.ui.uninstallAllMods)
         self.ui.uninstallAllMods.clicked.connect(uninstallAllMethod)
         
+        # New Group Button (NewGroup.svg icon only)
+        icons_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "ui_sources", "resources", "icons"))
+        new_group_icon_path = os.path.join(icons_dir, "NewGroup.svg")
+        move_group_icon_path = os.path.join(icons_dir, "MoveToGroup.svg")
+
+        self.ui.newGroupBtn = QPushButton(self.ui.leftButtons)
+        self.ui.newGroupBtn.setMinimumSize(QSize(30, 30))
+        self.ui.newGroupBtn.setCursor(Qt.PointingHandCursor)
+        if os.path.exists(new_group_icon_path):
+            self.ui.newGroupBtn.setIcon(QIcon(new_group_icon_path))
+        else:
+            self.ui.newGroupBtn.setIcon(QIcon(":/icons/resources/icons/NewGroup.svg"))
+        self.ui.newGroupBtn.setIconSize(QSize(18, 18))
+        self.ui.newGroupBtn.setToolTip("Create New Mod Group")
+        self.ui.newGroupBtn.setEnabled(True)
+        self.ui.horizontalLayout_4.insertWidget(3, self.ui.newGroupBtn)
+        self.ui.newGroupBtn.clicked.connect(self.promptNewGroup)
+
+        # Move Selected Mods Button (MoveToGroup.svg icon only)
+        self.ui.moveGroupBtn = QPushButton(self.ui.leftButtons)
+        self.ui.moveGroupBtn.setMinimumSize(QSize(30, 30))
+        self.ui.moveGroupBtn.setCursor(Qt.PointingHandCursor)
+        if os.path.exists(move_group_icon_path):
+            self.ui.moveGroupBtn.setIcon(QIcon(move_group_icon_path))
+        else:
+            self.ui.moveGroupBtn.setIcon(QIcon(":/icons/resources/icons/MoveToGroup.svg"))
+        self.ui.moveGroupBtn.setIconSize(QSize(18, 18))
+        self.ui.moveGroupBtn.setToolTip("Move Selected Mods to Group...")
+        self.ui.moveGroupBtn.setEnabled(True)
+        self.ui.horizontalLayout_4.insertWidget(4, self.ui.moveGroupBtn)
+        self.ui.moveGroupBtn.clicked.connect(self.promptMoveSelectedModsToGroup)
+
         self.ui.deleteAllMods.setIcon(QIcon(":/icons/resources/icons/Delete.png"))
         self.ui.deleteAllMods.setToolTip("Delete all mods from list")
-        
-        from ..utils.config import LoaderConfig
+
+
 
         self.savePresetMethod = savePresetMethod
         self.deletePresetMethod = deletePresetMethod
@@ -705,32 +831,56 @@ class Mods(QWidget):
 
     def searchEvent(self, text):
         if not text:
-            displayModButtons = self.modsButtons
+            for gw in self.modGroupsWidgets.values():
+                gw.show()
+                gw.setCollapsed(gw.collapsed)
+                for btn in gw.mod_buttons:
+                    btn.show()
 
-        else:
-            text = text.casefold().strip()
+            for btn in self.modsButtons:
+                if getattr(btn.modClass, 'favorite', False) or not getattr(btn.modClass, 'groupId', ''):
+                    btn.restore(self.modsList)
+            return
 
-            from ..utils.tags_helper import auto_detect_tags
-            displayModButtons = []
-            for modButton in self.modsButtons:
-                replacements = self.getModReplacements(modButton.modClass)
-                auto_tags = auto_detect_tags(modButton.modClass, replacements)
-                modButton.modClass.tags = auto_tags
-                
-                name_match = text in modButton.modClass.name.lower()
-                author_match = text in modButton.modClass.author.lower()
-                version_match = modButton.modClass.gameVersion.lower().startswith(text)
-                tag_match = any(text in t.lower() for t in auto_tags)
-                rep_match = any(text in r.lower() for r in replacements)
+        text = text.casefold().strip()
+        from ..utils.tags_helper import auto_detect_tags
 
-                if name_match or author_match or version_match or tag_match or rep_match:
-                    displayModButtons.append(modButton)
-
+        matching_buttons = set()
         for modButton in self.modsButtons:
-            modButton.remove()
+            replacements = self.getModReplacements(modButton.modClass)
+            auto_tags = auto_detect_tags(modButton.modClass, replacements)
+            modButton.modClass.tags = auto_tags
+            
+            name_match = text in modButton.modClass.name.lower()
+            author_match = text in modButton.modClass.author.lower()
+            version_match = modButton.modClass.gameVersion.lower().startswith(text)
+            tag_match = any(text in t.lower() for t in auto_tags)
+            rep_match = any(text in r.lower() for r in replacements)
 
-        for modButton in displayModButtons:
-            modButton.restore(self.modsList)
+            if name_match or author_match or version_match or tag_match or rep_match:
+                matching_buttons.add(modButton)
+
+        # Update visibility of group widgets and mod buttons
+        for gid, gw in self.modGroupsWidgets.items():
+            has_matching = any(b in matching_buttons for b in gw.mod_buttons)
+            if has_matching:
+                gw.show()
+                gw.contentFrame.show()
+                for btn in gw.mod_buttons:
+                    if btn in matching_buttons:
+                        btn.show()
+                    else:
+                        btn.hide()
+            else:
+                gw.hide()
+
+        for btn in self.modsButtons:
+            if getattr(btn.modClass, 'favorite', False) or not getattr(btn.modClass, 'groupId', ''):
+                if btn in matching_buttons:
+                    btn.restore(self.modsList)
+                else:
+                    btn.remove()
+
 
     def toggleListPreviews(self):
         from ..utils.config import LoaderConfig
@@ -774,12 +924,18 @@ class Mods(QWidget):
             self.body.modDescription.setMinimumHeight(modDescriptionHeight)
 
     def onModsListResize(self, event):
-        for n in range(self.modsList.layout().count()):
-            w = self.modsList.layout().takeAt(0).widget()
-            w.onParentResize()
-            self.modsList.layout().addWidget(w)
+        layout = self.modsList.layout()
+        if layout:
+            for i in range(layout.count()):
+                item = layout.itemAt(i)
+                if item:
+                    w = item.widget()
+                    if w and hasattr(w, 'onParentResize'):
+                        w.onParentResize()
 
-        self.origScrollModsListResizeEvent(event)
+        if hasattr(self, 'origScrollModsListResizeEvent') and self.origScrollModsListResizeEvent:
+            self.origScrollModsListResizeEvent(event)
+
 
     def eventFilter(self, qobject, event):
         # if event.type() not in [QEvent.HoverMove, QEvent.PolishRequest, QEvent.Paint, QEvent.MouseMove]:
@@ -1093,6 +1249,276 @@ class Mods(QWidget):
 
         self.tagsContainerLayout.addStretch()
 
+    def promptNewGroup(self):
+        from PySide6.QtWidgets import QInputDialog
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle("Create New Mod Group")
+        dialog.setLabelText("Enter a name for the new virtual mod group:")
+        dialog.setStyleSheet("""
+            QInputDialog { background-color: #141518; color: #FFFFFF; }
+            QLabel { color: #FFFFFF; font-size: 12px; font-weight: bold; }
+            QLineEdit { background-color: #1F2024; color: #FFFFFF; border: 1px solid #24638C; border-radius: 4px; padding: 6px; font-size: 12px; }
+            QPushButton { background-color: #24638C; color: #FFFFFF; border-radius: 4px; padding: 6px 14px; font-weight: bold; }
+            QPushButton:hover { background-color: #347BA9; }
+        """)
+    def promptNewGroup(self):
+        import random
+        from PySide6.QtWidgets import QDialog
+        from ..utils.tags_helper import CATEGORY_PALETTE
+        from .modgroupsettingsdialog import ModGroupSettingsDialog
+
+        default_color = random.choice(CATEGORY_PALETTE)
+        dlg = ModGroupSettingsDialog(
+            group_name="",
+            group_color=default_color,
+            mod_count=0,
+            icon="Folder.png",
+            is_create=True,
+            parent=self
+        )
+
+        if dlg.exec() == QDialog.Accepted:
+            name = dlg.new_name.strip()
+            if not name:
+                return
+            color_hex = dlg.new_color
+            selected_icon = dlg.new_icon
+
+            group_id = name.lower().replace(" ", "_")
+            from ..utils.config import LoaderConfig
+            config = LoaderConfig()
+            groups_dict = config.modGroups or {}
+
+            if group_id not in groups_dict:
+                groups_dict[group_id] = {
+                    "name": name,
+                    "color": color_hex,
+                    "collapsed": True,
+                    "icon": selected_icon
+                }
+                config.modGroups = groups_dict
+
+            self.get_or_create_group_widget(group_id, name, color_hex, selected_icon)
+            self.applySort(self.currentSortField, self.currentSortReverse)
+
+
+    def _select_icon(self, fname, dialog, buttons):
+        dialog.selected_icon = fname
+        for btn in buttons:
+            if btn.toolTip() == fname:
+                btn.setStyleSheet("border: 2px solid #24638C; background: #1A1B1F; border-radius: 4px;")
+            else:
+                btn.setStyleSheet("border: 1px solid transparent; background: transparent; border-radius: 4px;")
+
+    def install_all_in_group(self, group_id: str):
+        gw = self.modGroupsWidgets.get(group_id)
+        if not gw:
+            return
+        hashes = [btn.modClass.hash for btn in gw.mod_buttons 
+                  if not btn.modClass.installed and btn.modClass.modFileExist]
+        if not hashes:
+            return
+        if self.bulkInstallMethod:
+            self.bulkInstallMethod(hashes)
+        else:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Error", "No se puede instalar: el núcleo del ModLoader no está disponible.")
+
+    def uninstall_all_in_group(self, group_id: str):
+        gw = self.modGroupsWidgets.get(group_id)
+        if not gw:
+            return
+        hashes = [btn.modClass.hash for btn in gw.mod_buttons if btn.modClass.installed]
+        if not hashes:
+            return
+        if self.bulkUninstallMethod:
+            self.bulkUninstallMethod(hashes)
+        else:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Error", "No se puede desinstalar: el núcleo del ModLoader no está disponible.")
+
+    def get_or_create_group_widget(self, group_id: str, group_name: str, group_color: str = "", group_icon: str = ""):
+        if group_id in self.modGroupsWidgets:
+            gw = self.modGroupsWidgets[group_id]
+            if group_icon:
+                gw.setIcon(group_icon)
+            return gw
+
+        from ..utils.config import LoaderConfig
+        config = LoaderConfig()
+        groups_dict = config.modGroups or {}
+
+        if group_id in groups_dict:
+            info = groups_dict[group_id]
+            group_name = info.get("name", group_name)
+            group_color = info.get("color", group_color)
+            collapsed = info.get("collapsed", True)
+            group_icon = info.get("icon", group_icon or "Folder.png")
+        else:
+            from ..utils.tags_helper import CATEGORY_PALETTE
+            group_color = group_color or CATEGORY_PALETTE[len(groups_dict) % len(CATEGORY_PALETTE)]
+            group_icon = group_icon or "Folder.png"
+            collapsed = True
+            groups_dict[group_id] = {
+                "name": group_name,
+                "color": group_color,
+                "collapsed": collapsed,
+                "icon": group_icon
+            }
+            config.modGroups = groups_dict
+
+
+        from .modgroupwidget import ModGroupWidget
+        gw = ModGroupWidget(group_id, group_name, group_color, collapsed, icon=group_icon, parent=self.modsList)
+        gw.collapseToggled.connect(self.onGroupCollapseToggled)
+        gw.settingsRequested.connect(self.onGroupSettingsRequested)
+        gw.installAllRequested.connect(lambda: self.install_all_in_group(group_id))
+        gw.uninstallAllRequested.connect(lambda: self.uninstall_all_in_group(group_id))
+
+        self.modGroupsWidgets[group_id] = gw
+        return gw
+
+
+    def onGroupCollapseToggled(self, group_id: str, collapsed: bool):
+        from ..utils.config import LoaderConfig
+        config = LoaderConfig()
+        groups_dict = config.modGroups or {}
+        if group_id in groups_dict:
+            groups_dict[group_id]["collapsed"] = collapsed
+            config.modGroups = groups_dict
+
+    def onGroupSettingsRequested(self, group_id: str):
+        from ..utils.config import LoaderConfig
+        config = LoaderConfig()
+        groups_dict = config.modGroups or {}
+        if group_id not in groups_dict:
+            return
+
+        info = groups_dict[group_id]
+        gw = self.modGroupsWidgets.get(group_id)
+        mod_count = gw.count() if gw else 0
+
+        from .modgroupsettingsdialog import ModGroupSettingsDialog
+        dlg = ModGroupSettingsDialog(info["name"], info["color"], mod_count, icon=info.get("icon", "Folder.png"), parent=self)
+        if dlg.exec() == QDialog.Accepted:
+            if dlg.delete_requested:
+                self.deleteGroup(group_id)
+            else:
+                new_name = dlg.new_name
+                new_color = dlg.new_color
+                new_icon = getattr(dlg, 'new_icon', info.get("icon", "Folder.png"))
+
+                info["name"] = new_name
+                info["color"] = new_color
+                info["icon"] = new_icon
+                groups_dict[group_id] = info
+                config.modGroups = groups_dict
+
+                if gw:
+                    gw.updateGroupData(new_name, new_color, new_icon)
+
+
+    def deleteGroup(self, group_id: str):
+        from ..utils.config import LoaderConfig
+        config = LoaderConfig()
+        groups_dict = config.modGroups or {}
+        assignments = config.modGroupAssignments or {}
+
+        if group_id not in groups_dict:
+            return
+
+        group_mod_hashes = [h for h, gid in assignments.items() if gid == group_id]
+
+        for h in group_mod_hashes:
+            assignments.pop(h, None)
+        config.modGroupAssignments = assignments
+
+        groups_dict.pop(group_id, None)
+        config.modGroups = groups_dict
+
+        gw = self.modGroupsWidgets.pop(group_id, None)
+        if gw:
+            gw.clearModButtons()
+            gw.setParent(None)
+            gw.deleteLater()
+
+        self.rebuildVirtualGroups()
+
+    def promptMoveSelectedModsToGroup(self):
+        self.enterSelectionMode()
+
+    def enterSelectionMode(self):
+        self.selectionLabel.setText("Select mods to move")
+        self.selectionBannerFrame.show()
+
+        for btn in self.modsButtons:
+            btn.showCheckBox(True)
+
+    def exitSelectionMode(self):
+        self.selectionBannerFrame.hide()
+
+        for btn in self.modsButtons:
+            btn.showCheckBox(False)
+
+    def onMoveToClicked(self):
+        checked_buttons = [b for b in self.modsButtons if b.isChecked()]
+        if not checked_buttons:
+            msgBox = QMessageBox(self)
+            msgBox.setWindowTitle("Move Mods")
+            msgBox.setText("No mods selected. Please check the checkbox on at least one mod.")
+            msgBox.setStyleSheet("""
+                QMessageBox { background-color: #141518; color: #FFFFFF; }
+                QLabel { color: #FFFFFF; font-size: 12px; }
+                QPushButton { background-color: #43C15F; color: #FFFFFF; border-radius: 4px; padding: 5px 14px; }
+            """)
+            msgBox.exec()
+            return
+
+        from ..utils.config import LoaderConfig
+        config = LoaderConfig()
+        groups_dict = config.modGroups or {}
+
+        available_groups = []
+        for gid, gdata in groups_dict.items():
+            available_groups.append((gid, gdata.get("name", gid), gdata.get("color", "#24638C")))
+
+        from .movetogroupdialog import MoveToGroupDialog
+        dlg = MoveToGroupDialog(available_groups, current_group_id="", parent=self)
+        if dlg.exec() == QDialog.Accepted and dlg.selected_group_id is not None:
+            target_gid = dlg.selected_group_id
+            assignments = config.modGroupAssignments or {}
+
+            for btn in checked_buttons:
+                h = btn.modClass.hash
+                if target_gid == "":
+                    assignments.pop(h, None)
+                else:
+                    assignments[h] = target_gid
+
+            config.modGroupAssignments = assignments
+            self.exitSelectionMode()
+            self.rebuildVirtualGroups()
+
+    def rebuildVirtualGroups(self):
+        from ..utils.config import LoaderConfig
+        config = LoaderConfig()
+        groups_dict = config.modGroups or {}
+        assignments = config.modGroupAssignments or {}
+
+        for modButton in self.modsButtons:
+            h = modButton.modClass.hash
+            gid = assignments.get(h, "")
+            if gid and gid in groups_dict:
+                gdata = groups_dict[gid]
+                gcolor = gdata.get("color", "")
+                modButton.setGroup(gid, gcolor)
+                modButton.modClass.groupId = gid
+            else:
+                modButton.setGroup("", "")
+                modButton.modClass.groupId = ""
+
+        self.applySort(getattr(self, 'currentSortField', 'Name'), getattr(self, 'currentSortReverse', False))
+
     def selectMod(self, modClass: ModClass):
         self.hideWikiPreviewCard()
         for modButton in self.modsButtons:
@@ -1107,10 +1533,10 @@ class Mods(QWidget):
                               favoriteMethod=self.toggleFavoriteMethod)
 
         self.modsButtons.append(modButton)
-        AddToFrame(self.modsList, modButton)
 
         if not self.selectedModButton:
             modButton.select()
+
 
     def addMod(self,
                gameVersion: str,
@@ -1129,7 +1555,8 @@ class Mods(QWidget):
                favorite: bool = False,
                swfNames: List[str] = None,
                fileNames: List[str] = None,
-               spriteNames: List[str] = None):
+               spriteNames: List[str] = None,
+               modPath: str = ""):
 
         for path in previewsPaths:
             self.cachePreview(path)
@@ -1150,7 +1577,8 @@ class Mods(QWidget):
                        favorite,
                        swfNames,
                        fileNames,
-                       spriteNames)
+                       spriteNames,
+                       modPath=modPath)
 
         from ..utils.tags_helper import auto_detect_tags
         replacements = self.getModReplacements(mod)
@@ -1160,15 +1588,18 @@ class Mods(QWidget):
         self.addModButton(mod)
         
     def removeAllMods(self):
+        for gw in list(self.modGroupsWidgets.values()):
+            gw.clearModButtons()
+            gw.setParent(None)
+            gw.deleteLater()
+        self.modGroupsWidgets.clear()
+
         ClearFrame(self.modsList)
 
         self.selectedModButton = None
         for modButton in self.modsButtons:
             modButton.cleanup()
         self.modsButtons.clear()
-
-        # Clear global preview cache to free up RAM
-        SetPreview.cachedPreviews.clear()
 
         for modClass in self.mods.values():
             del modClass
@@ -1220,46 +1651,186 @@ class Mods(QWidget):
         
         menu.exec(QCursor.pos())
 
-    def applySort(self, field, reverse):
+    def sortMods(self, field, reverse):
+        self.applySort(field, reverse)
+
+    def applySort(self, field="Name", reverse=False):
+        try:
+            from main import FlowTracer
+            FlowTracer.log("applySort", f"field={field}, reverse={reverse}, total_mods={len(self.modsButtons)}")
+        except Exception: pass
+        self.currentSortField = field
+        self.currentSortReverse = reverse
+
         if self.sortCallback:
             self.sortCallback(field, reverse)
-            
-        # Save scroll position
+
         scroll_bar = self.ui.scrollModsList.verticalScrollBar()
         scroll_pos = scroll_bar.value()
 
-        # Split favorites and others
+        # Phase 1: Read configuration model from disk/cache
+        from ..utils.config import LoaderConfig
+        config = LoaderConfig()
+        groups_dict = config.modGroups or {}
+        raw_assignments = config.modGroupAssignments or {}
+
+        # Sanitize assignments pointing to missing/deleted groups
+        valid_group_ids = set(groups_dict.keys())
+        assignments = {h: gid for h, gid in raw_assignments.items() if gid in valid_group_ids}
+
+        # Phase 3: Build logical in-memory model (separate data from UI widgets)
         favorites = [b for b in self.modsButtons if b.modClass.favorite]
         others = [b for b in self.modsButtons if not b.modClass.favorite]
-        
-        if field == "Name":
-            favorites.sort(key=lambda x: x.modClass.name.lower(), reverse=reverse)
-            others.sort(key=lambda x: x.modClass.name.lower(), reverse=reverse)
-        elif field == "Date":
-            favorites.sort(key=lambda x: float(x.modClass.date or 0), reverse=reverse)
-            others.sort(key=lambda x: float(x.modClass.date or 0), reverse=reverse)
-        elif field == "Installed":
-            # Primary sort by installed status (True first), secondary by name (A-Z)
-            favorites.sort(key=lambda x: (not x.modClass.installed, x.modClass.name.lower()))
-            others.sort(key=lambda x: (not x.modClass.installed, x.modClass.name.lower()))
-        elif field == "Author":
-            favorites.sort(key=lambda x: (x.modClass.author.lower(), x.modClass.name.lower()), reverse=reverse)
-            others.sort(key=lambda x: (x.modClass.author.lower(), x.modClass.name.lower()), reverse=reverse)
 
-        # Merge them: favorites always first
+        sort_key = None
+        if field == "Name":
+            sort_key = lambda x: x.modClass.name.lower()
+        elif field == "Date":
+            sort_key = lambda x: float(x.modClass.date or 0)
+        elif field == "Installed":
+            sort_key = lambda x: (not x.modClass.installed, x.modClass.name.lower())
+        elif field == "Author":
+            sort_key = lambda x: (x.modClass.author.lower(), x.modClass.name.lower())
+
+        if sort_key:
+            favorites.sort(key=sort_key, reverse=reverse)
+            others.sort(key=sort_key, reverse=reverse)
+
         self.modsButtons = favorites + others
 
-        # Re-order in the layout
-        for modButton in self.modsButtons:
-            self.modsList.layout().removeWidget(modButton)
-            modButton.setParent(None)
+        # Phase 4: Build UI in a single atomic pass (Block signals and pause repaints)
+        self.modsList.setUpdatesEnabled(False)
+        self.blockSignals(True)
+        try:
+            try:
+                from main import FlowTracer
+                FlowTracer.log("applySort_step1", "Purging orphaned widgets")
+            except Exception: pass
 
-        for modButton in self.modsButtons:
-            AddToFrame(self.modsList, modButton)
-        
-        # Restore scroll position after layout updates
+            # Purge orphaned ModGroupWidgets no longer in config
+            for gid in list(self.modGroupsWidgets.keys()):
+                if gid not in valid_group_ids:
+                    gw = self.modGroupsWidgets.pop(gid)
+                    gw.clearModButtons()
+                    gw.setParent(None)
+                    gw.deleteLater()
+
+            try:
+                from main import FlowTracer
+                FlowTracer.log("applySort_step2", f"Ensuring {len(groups_dict)} group widgets exist")
+            except Exception: pass
+
+            # Ensure all saved groups have a ModGroupWidget instance
+            for gid, ginfo in groups_dict.items():
+                gname = ginfo.get("name", gid)
+                gcolor = ginfo.get("color", "")
+                gicon = ginfo.get("icon", "Folder.png")
+                self.get_or_create_group_widget(gid, gname, gcolor, gicon)
+
+
+            def safe_remove_from_layout(w):
+                p = w.parent()
+                if p and p.layout():
+                    p.layout().removeWidget(w)
+
+            try:
+                from main import FlowTracer
+                FlowTracer.log("applySort_step3", "Clearing mod buttons from group widgets")
+            except Exception: pass
+
+            # Clear content buttons from group widgets layout
+            for gw in self.modGroupsWidgets.values():
+                gw.clearModButtons()
+
+            try:
+                from main import FlowTracer
+                FlowTracer.log("applySort_step4", f"Adding {len(favorites)} favorites to layout")
+            except Exception: pass
+
+            # 1. Favorites at top of modsList (pinned at start)
+            for btn in favorites:
+                safe_remove_from_layout(btn)
+                h = btn.modClass.hash
+                gid = assignments.get(h, "")
+                if gid and gid in groups_dict:
+                    gcolor = groups_dict[gid].get("color", "")
+                    btn.setGroup(gid, gcolor)
+                    btn.modClass.groupId = gid
+                else:
+                    btn.setGroup("", "")
+                    btn.modClass.groupId = ""
+
+                btn.setParent(self.modsList)
+                self.modsList.layout().addWidget(btn)
+
+            try:
+                from main import FlowTracer
+                FlowTracer.log("applySort_step5", f"Adding ungrouped mods to layout")
+            except Exception: pass
+
+            # 2. Ungrouped non-favorite mods (loose mods)
+            ungrouped = [b for b in others if not assignments.get(b.modClass.hash, "")]
+            for btn in ungrouped:
+                safe_remove_from_layout(btn)
+                btn.setGroup("", "")
+                btn.modClass.groupId = ""
+                btn.setParent(self.modsList)
+                self.modsList.layout().addWidget(btn)
+
+            try:
+                from main import FlowTracer
+                FlowTracer.log("applySort_step6", f"Adding {len(self.modGroupsWidgets)} group widgets to layout")
+            except Exception: pass
+
+            # 3. Group widgets (each with its assigned mods)
+            for gid, gw in sorted(self.modGroupsWidgets.items(), key=lambda t: t[1].group_name.lower()):
+                try:
+                    from main import FlowTracer
+                    FlowTracer.log("applySort_step6.1_before_gw_add", f"gid={gid}, gw={gw}")
+                except Exception: pass
+                safe_remove_from_layout(gw)
+                gw.setParent(self.modsList)
+                self.modsList.layout().addWidget(gw)
+                gw.show()
+                try:
+                    from main import FlowTracer
+                    FlowTracer.log("applySort_step6.2_after_gw_add", f"gid={gid}")
+                except Exception: pass
+
+                group_btns = [b for b in others if assignments.get(b.modClass.hash, "") == gid]
+                if sort_key:
+                    group_btns.sort(key=sort_key, reverse=reverse)
+
+                try:
+                    from main import FlowTracer
+                    FlowTracer.log("applySort_step6.3_before_btns_add", f"group_btns_count={len(group_btns)}")
+                except Exception: pass
+
+                for btn in group_btns:
+                    safe_remove_from_layout(btn)
+                    btn.setGroup(gid, gw.group_color)
+                    btn.modClass.groupId = gid
+                    gw.addModButton(btn)
+
+                try:
+                    from main import FlowTracer
+                    FlowTracer.log("applySort_step6.4_after_group_done", f"gid={gid}")
+                except Exception: pass
+
+            try:
+                from main import FlowTracer
+                FlowTracer.log("applySort_step7", "Completed layout assembly")
+            except Exception: pass
+
+        finally:
+            self.blockSignals(False)
+            self.modsList.setUpdatesEnabled(True)
+            self.modsList.update()
+
         QTimer.singleShot(0, lambda: scroll_bar.setValue(scroll_pos))
 
-        # Keep selection visible if any
         if self.selectedModButton:
             self.selectedModButton.select()
+
+
+

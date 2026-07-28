@@ -15,6 +15,46 @@ import multiprocessing
 # (https://stackoverflow.com/questions/9144724/unknown-encoding-idna-in-python-requests)
 import encodings.idna
 
+def global_excepthook(exctype, value, tb):
+    print("[CRASH DETECTED] Unhandled Exception during execution:")
+    traceback.print_exception(exctype, value, tb)
+    sys.__excepthook__(exctype, value, tb)
+
+sys.excepthook = global_excepthook
+
+import faulthandler
+faulthandler.enable()
+
+def dump_stack_on_hang():
+    time.sleep(5)
+    print("\n==================== [WATCHDOG DUMP TRACEBACK] ====================")
+    faulthandler.dump_traceback()
+    print("===================================================================\n")
+
+threading.Thread(target=dump_stack_on_hang, daemon=True).start()
+
+
+class FlowTracer:
+    load_session_id = 0
+
+    @classmethod
+    def log(cls, func_name: str, details: str = ""):
+        try:
+            caller_frame = inspect.stack()[1]
+            caller_name = caller_frame.function
+            caller_file = os.path.basename(caller_frame.filename)
+            caller_line = caller_frame.lineno
+        except Exception:
+            pass
+
+
+    @classmethod
+    def new_session(cls, reason: str = ""):
+        cls.load_session_id += 1
+        print(f"\n==================== [START LOAD SESSION #{cls.load_session_id}: {reason}] ====================")
+
+
+
 # Auto-detect unrar.exe for RAR file extraction
 for _unrar in [
     r"C:\Program Files\WinRAR\unrar.exe",
@@ -249,7 +289,13 @@ class ModLoader(QMainWindow):
                          deletePresetMethod=self.deletePreset,
                          applyPresetMethod=self.applyPreset,
                          editPresetMethod=self.renamePreset,
-                         reloadPresetMethod=self.applyPreset)
+                         reloadPresetMethod=self.applyPreset,
+                         modsPath=self.modsPath,
+                         controllerGetter=lambda: getattr(self, 'controller', None),
+                         bulkInstallMethod=self.bulkInstallMods,
+                         bulkUninstallMethod=self.bulkUninstallMods)
+
+
 
         self.progressDialog = ProgressDialog(self)
         self.buttonsDialog = ButtonsDialog(self)
@@ -603,9 +649,12 @@ class ModLoader(QMainWindow):
                 self.showError("Fatal Error:", notification.args[0])
 
         elif cmd == Environment.ReloadMods:
+            FlowTracer.new_session("Environment.ReloadMods received from Core")
+            FlowTracer.log("Environment.ReloadMods", f"Count mods: {len(self.mods.mods)}")
             self.mods.removeAllMods()
 
         elif cmd == Environment.GetModsData:
+            FlowTracer.log("Environment.GetModsData", f"Received {len(data[1])} mods from Core")
             for modData in data[1]:
                 self.mods.addMod(gameVersion=modData.get("gameVersion", ""),
                                  name=modData.get("name", ""),
@@ -623,11 +672,15 @@ class ModLoader(QMainWindow):
                                  favorite=modData.get("hash", "") in self.config.favorites,
                                  swfNames=modData.get("swfNames", []),
                                  fileNames=modData.get("fileNames", []),
-                                 spriteNames=modData.get("spriteNames", []))
+                                 spriteNames=modData.get("spriteNames", []),
+                                 modPath=modData.get("modPath", ""))
 
+            FlowTracer.log("applySort_start", "At end of GetModsData")
             self.mods.applySort(self.currentSortField, self.currentSortReverse)
+            FlowTracer.log("applySort_end", "Finished applySort in GetModsData")
             self.setModsScreen()
             self.showErrorNotifications()
+
 
         elif cmd == Environment.GetModConflict:
             searching, modHash = data[1]
@@ -913,6 +966,37 @@ class ModLoader(QMainWindow):
         self.bulkOperationCount = len(mods_to_uninstall)
         for modButton in mods_to_uninstall:
             self.uninstallMod(modButton)
+
+    def bulkInstallMods(self, hashes: List[str]):
+        if not hashes:
+            return
+        if hasattr(self, 'controller') and self.controller:
+            self.bulkTotalCount = len(hashes)
+            self.bulkCompletedCount = 0
+            self.bulkOperationCount = len(hashes)
+            self.progressDialog.setMaximum(len(hashes))
+            self.progressDialog.setValue(0)
+            self.progressDialog.setTitle(f"Installing {len(hashes)} mods...")
+            self.progressDialog.setContent("Starting...")
+            self.progressDialog.show()
+            for h in hashes:
+                self.controller.getModConflict(h)
+
+    def bulkUninstallMods(self, hashes: List[str]):
+        if not hashes:
+            return
+        if hasattr(self, 'controller') and self.controller:
+            self.bulkTotalCount = len(hashes)
+            self.bulkCompletedCount = 0
+            self.bulkOperationCount = len(hashes)
+            self.progressDialog.setMaximum(len(hashes))
+            self.progressDialog.setValue(0)
+            self.progressDialog.setTitle(f"Uninstalling {len(hashes)} mods...")
+            self.progressDialog.setContent("Starting...")
+            self.progressDialog.show()
+            for h in hashes:
+                self.controller.uninstallMod(h)
+
 
     def clearCache(self):
         self.acceptDialog.setTitle("Clear Cache")
