@@ -2011,19 +2011,32 @@ class GameBananaFrame(QFrame):
         if progress < 100:
             self.dl_status_widget.show()
             self.dl_progress.setValue(progress)
-            self.dl_lbl.setText(f"Downloading... {progress}%" if progress > 0 else "Downloading...")
+            if isinstance(mid, str) and not mid.isdigit() and ("Downloading" in mid or "Error" in mid or "Done" in mid):
+                self.dl_lbl.setText(mid)
+            else:
+                self.dl_lbl.setText(f"Downloading... {progress}%" if progress > 0 else "Downloading...")
             if mid:
-                for c in self.cards:
-                    if c.mid == int(mid) and shiboken6.isValid(c):
-                        c.set_state("downloading", f"{progress}%")
+                try:
+                    mid_int = int(mid)
+                    for c in self.cards:
+                        if c.mid == mid_int and shiboken6.isValid(c):
+                            c.set_state("downloading", f"{progress}%")
+                except (ValueError, TypeError):
+                    pass
         else:
             self.dl_progress.setValue(100)
-            self.dl_lbl.setText("Downloaded")
+            if isinstance(mid, str) and not mid.isdigit():
+                self.dl_lbl.setText(mid)
+            else:
+                self.dl_lbl.setText("Downloaded")
             QTimer.singleShot(2000, self.dl_status_widget.hide)
 
     def is_downloaded(self, name, mid):
-        if int(mid) in self.session_downloaded_mids:
-            return True
+        try:
+            if mid is not None and int(mid) in self.session_downloaded_mids:
+                return True
+        except (ValueError, TypeError):
+            pass
         if not name: return False
         clean = re.sub(r'[^\w\s]', '', name).lower().strip()
         for i_name in self.installed_mods:

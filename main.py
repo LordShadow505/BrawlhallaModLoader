@@ -10,6 +10,12 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = NullWriter()
 
+import ssl
+try:
+    ssl._create_default_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+
 import time
 import py7zr
 import urllib
@@ -22,8 +28,15 @@ import subprocess
 import requests
 import multiprocessing
 
+import urllib3
+try:
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except Exception:
+    pass
+
 # (https://stackoverflow.com/questions/9144724/unknown-encoding-idna-in-python-requests)
 import encodings.idna
+
 
 def global_excepthook(exctype, value, tb):
     try:
@@ -1712,12 +1725,14 @@ class ModLoader(QMainWindow):
             self.progressDialog.show()
 
         try:
-                    # Install User-Agent opener to prevent GameBanana HTTP 403 Forbidden errors
-            opener = urllib.request.build_opener()
+            # Install User-Agent and unverified SSL opener to prevent GameBanana HTTP 403 Forbidden and SSL verification errors
+            ssl_ctx = ssl._create_unverified_context()
+            opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_ctx))
             opener.addheaders = [('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')]
             urllib.request.install_opener(opener)
 
             urllib.request.urlretrieve(webUrl, archivePath, reporthook)
+
             file_size = os.path.getsize(archivePath) if os.path.exists(archivePath) else 0
             print(f"[urlImport] Download finished. Downloaded archive size: {file_size} bytes")
 

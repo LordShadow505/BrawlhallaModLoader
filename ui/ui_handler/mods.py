@@ -1123,14 +1123,31 @@ class Mods(QWidget):
         return replacements
 
     def updateData(self):
-        modClass = self.selectedModButton.modClass
-
         self.modsActions.webPage.setParent(None)
         self.modsActions.install.setParent(None)
         self.modsActions.uninstall.setParent(None)
         self.modsActions.reinstall.setParent(None)
         self.modsActions.update.setParent(None)
         self.modsActions.deleteMod.setParent(None)
+
+        if not self.selectedModButton or not self.modsButtons:
+            self.body.modName.setText("Brawlhalla Mod Loader")
+            self.body.modName.setStyleSheet("color: #eeeeee;")
+            self.body.modSource.setText("Source: ")
+            self.body.modVersion.setText("Version: ")
+            self.body.modDescription.setText("")
+            self.setPreviewsPaths([self.defaultPreview])
+            if hasattr(self, 'warningFrame'):
+                self.warningFrame.hide()
+            if hasattr(self, 'replacesFrame'):
+                self.replacesFrame.hide()
+            if hasattr(self, 'exWarningFrame'):
+                self.exWarningFrame.hide()
+            self.updateTagPills([])
+            return
+
+        modClass = self.selectedModButton.modClass
+
 
         if modClass.installed:
             if modClass.modFileExist:
@@ -1818,6 +1835,100 @@ class Mods(QWidget):
                     FlowTracer.log("applySort_step6.4_after_group_done", f"gid={gid}")
                 except Exception: pass
 
+            # 4. If no mods are loaded at all, show English Welcome Notice
+            if not hasattr(self, 'emptyWelcomeWidget'):
+                from PySide6.QtWidgets import QFrame, QVBoxLayout, QLabel
+                from PySide6.QtGui import QFont
+
+                self.emptyWelcomeWidget = QFrame()
+                self.emptyWelcomeWidget.setStyleSheet("""
+                    QFrame {
+                        background-color: #1A1B1E;
+                        border: 1px solid #2B2C30;
+                        border-radius: 8px;
+                        margin: 10px;
+                    }
+                    QLabel {
+                        background: transparent;
+                        border: none;
+                    }
+                """)
+                wel_layout = QVBoxLayout(self.emptyWelcomeWidget)
+                wel_layout.setContentsMargins(18, 18, 18, 18)
+                wel_layout.setSpacing(12)
+
+                # Title
+                wel_title = QLabel("Welcome to Brawlhalla Mod Loader!")
+                wel_title.setFont(QFont("Segoe UI", 13, QFont.Bold))
+                wel_title.setStyleSheet("color: #FFFFFF;")
+                wel_layout.addWidget(wel_title)
+
+                # Body
+                wel_body = QLabel(
+                    'It looks like there are no mods here yet. Why not look for some on '
+                    '<a href="https://gamebanana.com/games/5704" style="color: #4DB6AC; text-decoration: underline;">GameBanana</a> or in the '
+                    '<a href="gamebanana_tab" style="color: #4DB6AC; text-decoration: underline;">GameBanana tab</a>?'
+                )
+                wel_body.setFont(QFont("Segoe UI", 10))
+                wel_body.setStyleSheet("color: #D0D0D0;")
+                wel_body.setWordWrap(True)
+                wel_body.setOpenExternalLinks(False)
+
+                def on_welcome_link_clicked(url):
+                    if url == "gamebanana_tab":
+                        try:
+                            if hasattr(self, 'main') and hasattr(self.main, 'setGamebananaScreen'):
+                                self.main.setGamebananaScreen()
+                            elif hasattr(self, 'main') and hasattr(self.main, 'header') and hasattr(self.main.header, 'headerGamebananaButton'):
+                                self.main.header.headerGamebananaButton.button.click()
+                        except Exception as e:
+                            print(f"Error opening GameBanana tab: {e}")
+                    else:
+                        import webbrowser
+                        webbrowser.open(url)
+
+                wel_body.linkActivated.connect(on_welcome_link_clicked)
+                wel_layout.addWidget(wel_body)
+
+                # Security / External Site Danger Warning
+                wel_security = QLabel(
+                    'If you find mods on another site or webpage, '
+                    '<span style="color: #FF5050; font-weight: bold;">BEWARE</span>! You MAY be in danger. '
+                    'The only safe places to download mods are '
+                    '<a href="https://gamebanana.com/games/5704" style="color: #4DB6AC; text-decoration: underline;">GameBanana</a> or the '
+                    '<a href="https://discord.gg/ctzYZxBHgY" style="color: #4DB6AC; text-decoration: underline;">Modhalla Discord</a>.'
+                )
+                wel_security.setFont(QFont("Segoe UI", 10))
+                wel_security.setStyleSheet("color: #FFFFFF;")
+                wel_security.setWordWrap(True)
+                wel_security.setOpenExternalLinks(False)
+                wel_security.linkActivated.connect(on_welcome_link_clicked)
+                wel_layout.addWidget(wel_security)
+
+                # Skin Paid Warning (in red)
+                wel_warning = QLabel("Remember that any existing skin mod requires a PAID skin, check the REQUIREMENTS section in GameBanana to find out which skin it replaces.")
+                wel_warning.setFont(QFont("Segoe UI", 9, QFont.Bold))
+                wel_warning.setStyleSheet("color: #FF5050;")
+                wel_warning.setWordWrap(True)
+                wel_layout.addWidget(wel_warning)
+
+                # Footer
+                wel_footer = QLabel("Happy Modding!")
+                wel_footer.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                wel_footer.setStyleSheet("color: #FFFFFF;")
+                wel_layout.addWidget(wel_footer)
+
+            safe_remove_from_layout(self.emptyWelcomeWidget)
+            if not self.modsButtons:
+                self.emptyWelcomeWidget.setParent(self.modsList)
+                self.modsList.layout().addWidget(self.emptyWelcomeWidget)
+                self.emptyWelcomeWidget.show()
+                self.selectedModButton = None
+                self.updateData()
+            else:
+                self.emptyWelcomeWidget.hide()
+
+
             try:
                 from main import FlowTracer
                 FlowTracer.log("applySort_step7", "Completed layout assembly")
@@ -1825,6 +1936,7 @@ class Mods(QWidget):
 
         finally:
             self.blockSignals(False)
+
             self.modsList.setUpdatesEnabled(True)
             self.modsList.update()
 

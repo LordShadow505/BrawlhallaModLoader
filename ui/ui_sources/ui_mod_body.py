@@ -264,7 +264,7 @@ class Ui_ModBody(object):
         ModBody.setWindowTitle(QCoreApplication.translate("ModBody", u"Form", None))
         self.leftPreview.setText("")
         self.rightPreview.setText("")
-        self.modName.setText(QCoreApplication.translate("ModBody", u"Brawlhalla Modloader", None))
+        self.modName.setText(QCoreApplication.translate("ModBody", u"Brawlhalla Mod Loader", None))
         self.modSource.setText(QCoreApplication.translate("ModBody", u"Source:", None))
         self.modVersion.setText(QCoreApplication.translate("ModBody", u"Version:", None))
         self.modPreview.setText("")
