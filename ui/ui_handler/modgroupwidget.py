@@ -48,11 +48,12 @@ class ModGroupHeader(QFrame):
         self.updateHeaderStyle()
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 4, 8, 4)
+        layout.setContentsMargins(10, 4, 10, 4)
         layout.setSpacing(6)
 
         # Arrow icon
         self.arrowLabel = QLabel()
+        self.arrowLabel.setFixedSize(20, 20)
         self.arrowLabel.setStyleSheet("background: transparent; border: none;")
         layout.addWidget(self.arrowLabel)
 
@@ -150,8 +151,9 @@ class ModGroupHeader(QFrame):
 
     def updateArrow(self):
         icon_path = self.arrow_right_path if self.collapsed else self.arrow_down_path
-        pix = load_tinted_svg(icon_path, "#FFFFFF", 16)
+        pix = load_tinted_svg(icon_path, "#FFFFFF", 20)
         self.arrowLabel.setPixmap(pix)
+
 
     def setCollapsed(self, collapsed: bool):
         self.collapsed = collapsed

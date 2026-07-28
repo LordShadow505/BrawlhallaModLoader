@@ -406,11 +406,12 @@ class Mods(QWidget):
         layout.addWidget(self.modsList, 0, Qt.AlignTop)
 
         self.ui.scrollModsList.setWidget(modsListFrame)
-
+        self.ui.scrollModsList.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
 
         self.resizeEvent = self.onResize
         self.origScrollModsListResizeEvent = self.ui.scrollModsList.resizeEvent
         self.ui.scrollModsList.resizeEvent = self.onModsListResize
+
 
         actionsWidget = QWidget()
         self.modsActions = Ui_ModsActions()

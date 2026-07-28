@@ -1,5 +1,15 @@
 import os
 import sys
+
+class NullWriter:
+    def write(self, s): pass
+    def flush(self): pass
+
+if sys.stdout is None:
+    sys.stdout = NullWriter()
+if sys.stderr is None:
+    sys.stderr = NullWriter()
+
 import json
 import socket
 import hashlib
@@ -8,6 +18,7 @@ import threading
 import multiprocessing
 
 ERROR = None
+
 try:
     import core
 except Exception as e:

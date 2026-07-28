@@ -1,5 +1,15 @@
 import os
 import sys
+
+class NullWriter:
+    def write(self, s): pass
+    def flush(self): pass
+
+if sys.stdout is None:
+    sys.stdout = NullWriter()
+if sys.stderr is None:
+    sys.stderr = NullWriter()
+
 import time
 import py7zr
 import urllib
@@ -16,22 +26,14 @@ import multiprocessing
 import encodings.idna
 
 def global_excepthook(exctype, value, tb):
-    print("[CRASH DETECTED] Unhandled Exception during execution:")
-    traceback.print_exception(exctype, value, tb)
-    sys.__excepthook__(exctype, value, tb)
+    try:
+        if sys.stderr and sys.stderr is not None:
+            traceback.print_exception(exctype, value, tb)
+    except Exception:
+        pass
 
 sys.excepthook = global_excepthook
 
-import faulthandler
-faulthandler.enable()
-
-def dump_stack_on_hang():
-    time.sleep(5)
-    print("\n==================== [WATCHDOG DUMP TRACEBACK] ====================")
-    faulthandler.dump_traceback()
-    print("===================================================================\n")
-
-threading.Thread(target=dump_stack_on_hang, daemon=True).start()
 
 
 class FlowTracer:
