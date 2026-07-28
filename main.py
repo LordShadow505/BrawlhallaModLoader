@@ -1427,8 +1427,6 @@ class ModLoader(QMainWindow):
         if totalsize > 0:
             downloadPercentage = int(readedData * 100 / totalsize)
             self.progressDialog.setValue(downloadPercentage)
-            if hasattr(self, 'gamebanana'):
-                self.gamebanana.set_download_progress(downloadPercentage, f"Downloading... {downloadPercentage}%")
             QApplication.processEvents()
 
     def updateApp(self, fileUrl: str, version: str):
