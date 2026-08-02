@@ -839,36 +839,36 @@ class Mods(QWidget):
                     btn.show()
 
             for btn in self.modsButtons:
-                if getattr(btn.modClass, 'favorite', False) or not getattr(btn.modClass, 'groupId', ''):
+                if btn.parent() == self.modsList:
                     btn.restore(self.modsList)
             return
 
         text = text.casefold().strip()
         from ..utils.tags_helper import auto_detect_tags
 
-        matching_buttons = set()
-        for modButton in self.modsButtons:
-            replacements = self.getModReplacements(modButton.modClass)
-            auto_tags = auto_detect_tags(modButton.modClass, replacements)
-            modButton.modClass.tags = auto_tags
+        matching_hashes = set()
+        for modClass in self.mods.values():
+            replacements = self.getModReplacements(modClass)
+            auto_tags = auto_detect_tags(modClass, replacements)
+            modClass.tags = auto_tags
             
-            name_match = text in modButton.modClass.name.lower()
-            author_match = text in modButton.modClass.author.lower()
-            version_match = modButton.modClass.gameVersion.lower().startswith(text)
+            name_match = text in modClass.name.lower()
+            author_match = text in modClass.author.lower()
+            version_match = modClass.gameVersion.lower().startswith(text)
             tag_match = any(text in t.lower() for t in auto_tags)
             rep_match = any(text in r.lower() for r in replacements)
 
             if name_match or author_match or version_match or tag_match or rep_match:
-                matching_buttons.add(modButton)
+                matching_hashes.add(modClass.hash)
 
         # Update visibility of group widgets and mod buttons
         for gid, gw in self.modGroupsWidgets.items():
-            has_matching = any(b in matching_buttons for b in gw.mod_buttons)
+            has_matching = any(b.modClass.hash in matching_hashes for b in gw.mod_buttons)
             if has_matching:
                 gw.show()
                 gw.contentFrame.show()
                 for btn in gw.mod_buttons:
-                    if btn in matching_buttons:
+                    if btn.modClass.hash in matching_hashes:
                         btn.show()
                     else:
                         btn.hide()
@@ -876,8 +876,8 @@ class Mods(QWidget):
                 gw.hide()
 
         for btn in self.modsButtons:
-            if getattr(btn.modClass, 'favorite', False) or not getattr(btn.modClass, 'groupId', ''):
-                if btn in matching_buttons:
+            if btn.parent() == self.modsList:
+                if btn.modClass.hash in matching_hashes:
                     btn.restore(self.modsList)
                 else:
                     btn.remove()
@@ -1675,7 +1675,7 @@ class Mods(QWidget):
     def applySort(self, field="Name", reverse=False):
         try:
             from main import FlowTracer
-            FlowTracer.log("applySort", f"field={field}, reverse={reverse}, total_mods={len(self.modsButtons)}")
+            FlowTracer.log("applySort", f"field={field}, reverse={reverse}, total_mods={len(self.mods)}")
         except Exception: pass
         self.currentSortField = field
         self.currentSortReverse = reverse
@@ -1696,34 +1696,39 @@ class Mods(QWidget):
         valid_group_ids = set(groups_dict.keys())
         assignments = {h: gid for h, gid in raw_assignments.items() if gid in valid_group_ids}
 
-        # Phase 3: Build logical in-memory model (separate data from UI widgets)
-        favorites = [b for b in self.modsButtons if b.modClass.favorite]
-        others = [b for b in self.modsButtons if not b.modClass.favorite]
+        # Phase 2: Sort underlying ModClass objects
+        mod_list = list(self.mods.values())
 
         sort_key = None
         if field == "Name":
-            sort_key = lambda x: x.modClass.name.lower()
+            sort_key = lambda x: x.name.lower()
         elif field == "Date":
-            sort_key = lambda x: float(x.modClass.date or 0)
+            sort_key = lambda x: float(x.date or 0)
         elif field == "Installed":
-            sort_key = lambda x: (not x.modClass.installed, x.modClass.name.lower())
+            sort_key = lambda x: (not x.installed, x.name.lower())
         elif field == "Author":
-            sort_key = lambda x: (x.modClass.author.lower(), x.modClass.name.lower())
+            sort_key = lambda x: (x.author.lower(), x.name.lower())
 
         if sort_key:
-            favorites.sort(key=sort_key, reverse=reverse)
-            others.sort(key=sort_key, reverse=reverse)
+            mod_list.sort(key=sort_key, reverse=reverse)
 
-        self.modsButtons = favorites + others
+        favorites_mods = [m for m in mod_list if m.favorite]
+        ungrouped_mods = [m for m in mod_list if not m.favorite and not assignments.get(m.hash, "")]
 
-        # Phase 4: Build UI in a single atomic pass (Block signals and pause repaints)
+        # Phase 3: Build UI in a single atomic pass
         self.modsList.setUpdatesEnabled(False)
         self.blockSignals(True)
         try:
-            try:
-                from main import FlowTracer
-                FlowTracer.log("applySort_step1", "Purging orphaned widgets")
-            except Exception: pass
+            def safe_remove_from_layout(w):
+                p = w.parent()
+                if p and p.layout():
+                    p.layout().removeWidget(w)
+
+            # Purge existing ModButton widgets
+            for btn in list(self.modsButtons):
+                safe_remove_from_layout(btn)
+                btn.cleanup()
+            self.modsButtons.clear()
 
             # Purge orphaned ModGroupWidgets no longer in config
             for gid in list(self.modGroupsWidgets.keys()):
@@ -1733,11 +1738,6 @@ class Mods(QWidget):
                     gw.setParent(None)
                     gw.deleteLater()
 
-            try:
-                from main import FlowTracer
-                FlowTracer.log("applySort_step2", f"Ensuring {len(groups_dict)} group widgets exist")
-            except Exception: pass
-
             # Ensure all saved groups have a ModGroupWidget instance
             for gid, ginfo in groups_dict.items():
                 gname = ginfo.get("name", gid)
@@ -1745,95 +1745,53 @@ class Mods(QWidget):
                 gicon = ginfo.get("icon", "Folder.png")
                 self.get_or_create_group_widget(gid, gname, gcolor, gicon)
 
-
-            def safe_remove_from_layout(w):
-                p = w.parent()
-                if p and p.layout():
-                    p.layout().removeWidget(w)
-
-            try:
-                from main import FlowTracer
-                FlowTracer.log("applySort_step3", "Clearing mod buttons from group widgets")
-            except Exception: pass
-
             # Clear content buttons from group widgets layout
             for gw in self.modGroupsWidgets.values():
                 gw.clearModButtons()
 
-            try:
-                from main import FlowTracer
-                FlowTracer.log("applySort_step4", f"Adding {len(favorites)} favorites to layout")
-            except Exception: pass
+            new_mods_buttons = []
 
-            # 1. Favorites at top of modsList (pinned at start)
-            for btn in favorites:
-                safe_remove_from_layout(btn)
-                h = btn.modClass.hash
-                gid = assignments.get(h, "")
-                if gid and gid in groups_dict:
-                    gcolor = groups_dict[gid].get("color", "")
-                    btn.setGroup(gid, gcolor)
-                    btn.modClass.groupId = gid
+            def create_button(modClass, group_id="", group_color=""):
+                btn = ModButton(modClass=modClass,
+                                method=self.selectMod,
+                                favoriteMethod=self.toggleFavoriteMethod)
+                if group_id and group_id in groups_dict:
+                    gcolor = group_color or groups_dict[group_id].get("color", "")
+                    btn.setGroup(group_id, gcolor)
+                    btn.modClass.groupId = group_id
                 else:
                     btn.setGroup("", "")
                     btn.modClass.groupId = ""
+                new_mods_buttons.append(btn)
+                return btn
 
+            # 1. Favorites at top of modsList (pinned at start)
+            for m in favorites_mods:
+                gid = assignments.get(m.hash, "")
+                gcolor = groups_dict.get(gid, {}).get("color", "") if gid else ""
+                btn = create_button(m, group_id=gid, group_color=gcolor)
                 btn.setParent(self.modsList)
                 self.modsList.layout().addWidget(btn)
-
-            try:
-                from main import FlowTracer
-                FlowTracer.log("applySort_step5", f"Adding ungrouped mods to layout")
-            except Exception: pass
 
             # 2. Ungrouped non-favorite mods (loose mods)
-            ungrouped = [b for b in others if not assignments.get(b.modClass.hash, "")]
-            for btn in ungrouped:
-                safe_remove_from_layout(btn)
-                btn.setGroup("", "")
-                btn.modClass.groupId = ""
+            for m in ungrouped_mods:
+                btn = create_button(m)
                 btn.setParent(self.modsList)
                 self.modsList.layout().addWidget(btn)
 
-            try:
-                from main import FlowTracer
-                FlowTracer.log("applySort_step6", f"Adding {len(self.modGroupsWidgets)} group widgets to layout")
-            except Exception: pass
-
-            # 3. Group widgets (each with its assigned mods)
+            # 3. Group widgets (each with its assigned mods, including favorite mods!)
             for gid, gw in sorted(self.modGroupsWidgets.items(), key=lambda t: t[1].group_name.lower()):
-                try:
-                    from main import FlowTracer
-                    FlowTracer.log("applySort_step6.1_before_gw_add", f"gid={gid}, gw={gw}")
-                except Exception: pass
                 safe_remove_from_layout(gw)
                 gw.setParent(self.modsList)
                 self.modsList.layout().addWidget(gw)
                 gw.show()
-                try:
-                    from main import FlowTracer
-                    FlowTracer.log("applySort_step6.2_after_gw_add", f"gid={gid}")
-                except Exception: pass
 
-                group_btns = [b for b in others if assignments.get(b.modClass.hash, "") == gid]
-                if sort_key:
-                    group_btns.sort(key=sort_key, reverse=reverse)
-
-                try:
-                    from main import FlowTracer
-                    FlowTracer.log("applySort_step6.3_before_btns_add", f"group_btns_count={len(group_btns)}")
-                except Exception: pass
-
-                for btn in group_btns:
-                    safe_remove_from_layout(btn)
-                    btn.setGroup(gid, gw.group_color)
-                    btn.modClass.groupId = gid
+                group_mods = [m for m in mod_list if assignments.get(m.hash, "") == gid]
+                for m in group_mods:
+                    btn = create_button(m, group_id=gid, group_color=gw.group_color)
                     gw.addModButton(btn)
 
-                try:
-                    from main import FlowTracer
-                    FlowTracer.log("applySort_step6.4_after_group_done", f"gid={gid}")
-                except Exception: pass
+            self.modsButtons = new_mods_buttons
 
             # 4. If no mods are loaded at all, show English Welcome Notice
             if not hasattr(self, 'emptyWelcomeWidget'):

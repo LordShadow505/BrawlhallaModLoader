@@ -550,7 +550,6 @@ class ModLoader(QMainWindow):
                 for btn in self.mods.modsButtons:
                     if btn.modClass.hash == modHash:
                         btn.updateData()
-                        break
                 
                 # Update main view if it's the selected one
                 if self.mods.selectedModButton and self.mods.selectedModButton.modClass.hash == modHash:
@@ -606,7 +605,6 @@ class ModLoader(QMainWindow):
                 for btn in self.mods.modsButtons:
                     if btn.modClass.hash == modHash:
                         btn.updateData()
-                        break
                 
                 # Update main view if it's the selected one
                 if self.mods.selectedModButton and self.mods.selectedModButton.modClass.hash == modHash:
@@ -965,7 +963,12 @@ class ModLoader(QMainWindow):
         if self.checkGameRunning():
             return
             
-        installed_mods = [btn for btn in self.mods.modsButtons if btn.modClass.installed]
+        installed_hashes = set()
+        installed_mods = []
+        for btn in self.mods.modsButtons:
+            if btn.modClass.installed and btn.modClass.hash not in installed_hashes:
+                installed_hashes.add(btn.modClass.hash)
+                installed_mods.append(btn)
         if not installed_mods:
             return
             

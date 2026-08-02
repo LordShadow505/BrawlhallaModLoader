@@ -60,6 +60,7 @@ class ModButton(QWidget):
         """)
 
         self.checkBox.hide()
+        self.checkBox.clicked.connect(self._onCheckBoxClicked)
 
 
         # Favorite button
@@ -106,6 +107,14 @@ class ModButton(QWidget):
 
     def setChecked(self, val: bool):
         self.checkBox.setChecked(val)
+        for btn in self.buttons:
+            if btn is not self and getattr(btn, 'modClass', None) and btn.modClass.hash == self.modClass.hash:
+                btn.checkBox.setChecked(val)
+
+    def _onCheckBoxClicked(self, checked: bool):
+        for btn in self.buttons:
+            if btn is not self and getattr(btn, 'modClass', None) and btn.modClass.hash == self.modClass.hash:
+                btn.checkBox.setChecked(checked)
 
     def showCheckBox(self, visible: bool):
         if visible:
