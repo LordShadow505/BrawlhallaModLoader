@@ -38,16 +38,19 @@ client_exe = EXE(client_pyz,
 app_a = Analysis(['run.py'],
                  binaries=[],
                  datas=[],
-                 hiddenimports=['core', 'core.worker', 'core.worker.brawlhalla', 'core.worker.config', 'pybanana', 'requests', 'yarl', 'encodings.idna', 'encodings.utf_8'],
+                 hiddenimports=['core', 'core.worker', 'core.worker.brawlhalla', 'core.worker.config', 'pybanana', 'requests', 'yarl', 'encodings.idna', 'encodings.utf_8', 'markdown', 'markdown.extensions.tables', 'markdown.extensions.fenced_code', 'markdown.extensions.sane_lists'],
                  hookspath=[],
                  runtime_hooks=[],
                  excludes=['tkinter', '_tkinter'],
                  win_no_prefer_redirects=False,
                  win_private_assemblies=False,
                  noarchive=False)
-app_a.datas += [('file_icon.ico','file_icon.ico','DATA'),
+
+app_a.datas += [('file_icon.ico', 'file_icon.ico', 'DATA'),
                 (os.path.split(client_exe.name)[1], client_exe.name, 'DATA'),
                 ('unrar.exe', 'libs\\unrar.exe', 'DATA')]
+app_a.datas += Tree("ui", "ui", excludes=["*.ttf", "*.ui", "*.txt", "*.pyc", "*.pyo"])
+app_a.datas += Tree("core", "core", excludes=["*.pyc", "*.pyo"])
 
 app_pyz = PYZ(app_a.pure, app_a.zipped_data)
 
@@ -64,11 +67,8 @@ app_exe = EXE(app_pyz,
               app_a.binaries,
               app_a.zipfiles,
               app_a.datas,
-              Tree("ui", "ui", excludes=["*.ttf", "*.ui", "*.txt", "*.pyc", "*.pyo"]),
-              Tree("core", "core", excludes=["*.pyc", "*.pyo"]),
               app_splash,
               app_splash.binaries,
-
               name='Brawlhalla Mod Loader',
               debug=False,
               bootloader_ignore_signals=False,
@@ -79,5 +79,3 @@ app_exe = EXE(app_pyz,
               version='version.spec',
               console=False,
               icon='ui/ui_sources/resources/icons/App.ico')
-
-#os.remove(client_exe.name)
