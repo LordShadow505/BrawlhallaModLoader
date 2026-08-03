@@ -1415,10 +1415,8 @@ class ModLoader(QMainWindow):
 
     @QExecMainThread
     def newVersion(self, url: str, fileUrl: str, version: str, body: str):
-        from ui.utils.markdown_helper import render_markdown_to_html
         self.buttonsDialog.setTitle(f"New version available '{version}'")
-        formatted_html = render_markdown_to_html(body)
-        self.buttonsDialog.setContent(formatted_html)
+        self.buttonsDialog.setContent(TextFormatter.format(body, 11))
         self.buttonsDialog.deleteButtons()
         self.buttonsDialog.addButton("GO TO SITE", lambda: webbrowser.open(url))
         self.buttonsDialog.addButton("UPDATE", lambda: [self.buttonsDialog.hide(),
