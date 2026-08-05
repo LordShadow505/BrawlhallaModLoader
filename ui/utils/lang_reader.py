@@ -33,6 +33,7 @@ class BrawlhallaLangReader:
         self.translations: Dict[str, Dict[str, str]] = {}
         self.costume_map: Dict[str, str] = {}
         self.weapon_map: Dict[str, str] = {}
+        self.avatar_map: Dict[str, str] = {}
         # Suffix index: maps suffix -> [full_code, ...]
         self.costume_suffix_index: Dict[str, List[str]] = {}
 
@@ -103,6 +104,15 @@ class BrawlhallaLangReader:
                 elif k.startswith("EquipmentType_") and k.endswith("_DisplayName"):
                     middle = k[len("EquipmentType_"):-len("_DisplayName")]
                     self.weapon_map[middle.lower()] = v
+                elif k.startswith("AvatarType_") and k.endswith("_DisplayName"):
+                    code = k[len("AvatarType_"):-len("_DisplayName")]
+                    self.avatar_map[code.lower()] = v
+                elif k.startswith("AvatarType_") and k.endswith("_Name"):
+                    code = k[len("AvatarType_"):-len("_Name")]
+                    self.avatar_map[code.lower()] = v
+                elif k.startswith("ItemType_Avatar_") and k.endswith("_DisplayName"):
+                    code = k[len("ItemType_Avatar_"):-len("_DisplayName")]
+                    self.avatar_map[code.lower()] = v
             # Build suffix index for costume_map
             for full_code in list(self.costume_map.keys()):
                 # index every suffix of length >= 3
@@ -205,6 +215,83 @@ class BrawlhallaLangReader:
                 if res:
                     return f"{res} ({weapon_type})"
         return None
+
+    def resolve_avatar(self, code: str) -> Optional[str]:
+        if not hasattr(self, 'avatar_map') or not self.avatar_map:
+            self.load_language(1)
+        c_low = code.lower()
+        res = self.avatar_map.get(c_low)
+        if res:
+            return res
+        if "_" in code:
+            for sub in code.split("_"):
+                res = self.avatar_map.get(sub.lower())
+                if res:
+                    return res
+        return None
+
+
+def format_avatar_name(raw_name: str, lang_reader=None) -> str:
+    name = os.path.splitext(os.path.basename(raw_name))[0]
+    n_low = name.lower()
+
+    is_flag = any(p in n_low for p in ['flag1a', 'flag1b', 'flag1blong', 'flag_'])
+
+    clean = name
+    prefixes = [
+        'a_CPPScaler_', 'CPPScaler_', 'a_AvatarIcon_', 'a_Flag1bLong_', 'a_Flag1a_', 'a_Flag1b_',
+        'a_Flag_', 'a_Avatar_', 'Flag1bLong_', 'Flag1a_', 'Flag1b_', 'AvatarIcon_', 'UI_Avatars',
+        'Sprites_Avatars_128', 'Sprites_Avatars'
+    ]
+    for p in prefixes:
+        if clean.lower().startswith(p.lower()):
+            clean = clean[len(p):]
+            break
+
+    if clean.lower().startswith("flag") and len(clean) > 4:
+        is_flag = True
+        clean = clean[4:]
+    elif clean.lower().endswith("flag") and len(clean) > 4:
+        is_flag = True
+        clean = clean[:-4]
+
+    # Exclude default avatar / empty / icon
+    if clean.lower() in ['', 'avatar', 'default', 'none', 'icon']:
+        return ""
+
+    if lang_reader and hasattr(lang_reader, 'resolve_avatar'):
+        resolved = lang_reader.resolve_avatar(clean)
+        if resolved:
+            if resolved.lower().endswith(" avatar"):
+                resolved = resolved[:-7].strip()
+            return resolved
+
+    import re
+    words = re.findall(r'[A-Z][a-z0-9]*|[a-z0-9]+', clean)
+    if not words:
+        words = [clean]
+
+    formatted_words = []
+    for w in words:
+        w_cap = w.capitalize()
+        if w_cap.lower() in ['icon', 'avataricon', 'avatar', 'cppscaler']:
+            continue
+        formatted_words.append(w_cap)
+
+    if not formatted_words:
+        return ""
+
+    formatted = " ".join(formatted_words)
+
+    known_flags = {'mexico', 'pride', 'trans', 'coffee', 'bombhalla', 'knotwork', 'ramen', 'swiftpottery', 'swiftsports', 'wepdrop', 'wolfmoon', 'yarnasuri', 'yumikoflames', 'canada', 'usa', 'uk', 'brazil', 'france', 'germany', 'spain', 'italy', 'japan', 'korea', 'china', 'australia', 'guam'}
+    if any(kf in clean.lower() for kf in known_flags) or is_flag:
+        if "flag" not in formatted.lower():
+            formatted = f"{formatted} Flag"
+
+    if formatted.lower() in ['', 'avatar', 'default', 'none', 'flag']:
+        return ""
+
+    return formatted
 
 
 GLOBAL_LANG_READER_INSTANCE = None

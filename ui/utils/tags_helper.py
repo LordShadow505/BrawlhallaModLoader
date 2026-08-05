@@ -130,9 +130,24 @@ def auto_detect_tags(mod_class, replacements: List[str] = None, lang_reader=None
 
     swf_names = getattr(mod_class, 'swfNames', []) or []
     file_names = getattr(mod_class, 'fileNames', []) or []
+    sprite_names = getattr(mod_class, 'spriteNames', []) or []
     replacements = replacements or []
 
-    all_files = [f.lower() for f in swf_names + file_names]
+    all_files = [f.lower() for f in swf_names + file_names + sprite_names]
+
+    # Check if this mod is an Avatar mod
+    is_avatar = (
+        any(any(p in f for p in ['ui_avatars', 'sprites_avatars', 'avatar', 'cppscaler', 'flag1a', 'flag1b', 'flag1blong']) for f in all_files) or
+        any('(avatar)' in r.lower() or 'avatar' in r.lower() for r in replacements)
+    )
+
+    if is_avatar:
+        if 'ui' not in seen:
+            tags.append('UI')
+            seen.add('ui')
+        if 'avatars' not in seen and 'avatar' not in seen:
+            tags.append('Avatars')
+            seen.add('avatars')
 
     has_effects = any(any(p in f for p in ['bones', 'sfx']) for f in all_files)
     has_ui = any('ui' in f or 'menu' in f or 'hud' in f for f in all_files)
@@ -155,27 +170,32 @@ def auto_detect_tags(mod_class, replacements: List[str] = None, lang_reader=None
 
     for rep in replacements:
         r_low = rep.lower()
+        if '(avatar)' in r_low:
+            continue
         if '(legend skin)' in r_low or not ('(' in r_low and ')' in r_low):
-            has_costume = True
+            if not is_avatar:
+                has_costume = True
         else:
             has_weapon = True
 
-        for leg in legends:
-            if leg.lower() in rep.lower() and leg.lower() not in seen:
-                tags.append(leg)
-                seen.add(leg.lower())
+        if not is_avatar:
+            for leg in legends:
+                if leg.lower() in r_low and leg.lower() not in seen:
+                    tags.append(leg)
+                    seen.add(leg.lower())
 
-    for f in all_files:
-        for leg in legends:
-            if leg.lower() in f and leg.lower() not in seen:
-                tags.append(leg)
-                seen.add(leg.lower())
+    if not is_avatar:
+        for f in all_files:
+            for leg in legends:
+                if leg.lower() in f and leg.lower() not in seen:
+                    tags.append(leg)
+                    seen.add(leg.lower())
 
-    if has_costume and 'legend skin' not in seen:
+    if has_costume and not is_avatar and 'legend skin' not in seen:
         tags.insert(0, 'Legend Skin')
         seen.add('legend skin')
     if has_weapon and 'weapon skin' not in seen:
-        idx = 0 if 'legend skin' not in seen else 1
+        idx = 0 if ('legend skin' not in seen and 'ui' not in seen) else 1
         tags.insert(idx, 'Weapon Skin')
         seen.add('weapon skin')
 

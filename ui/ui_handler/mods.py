@@ -839,8 +839,7 @@ class Mods(QWidget):
                     btn.show()
 
             for btn in self.modsButtons:
-                if btn.parent() == self.modsList:
-                    btn.restore(self.modsList)
+                btn.show()
             return
 
         text = text.casefold().strip()
@@ -861,7 +860,7 @@ class Mods(QWidget):
             if name_match or author_match or version_match or tag_match or rep_match:
                 matching_hashes.add(modClass.hash)
 
-        # Update visibility of group widgets and mod buttons
+        # Update visibility of group widgets and their mod buttons
         for gid, gw in self.modGroupsWidgets.items():
             has_matching = any(b.modClass.hash in matching_hashes for b in gw.mod_buttons)
             if has_matching:
@@ -875,12 +874,17 @@ class Mods(QWidget):
             else:
                 gw.hide()
 
+        # Update visibility of loose and favorite mod buttons in modsList
+        group_btn_set = set()
+        for gw in self.modGroupsWidgets.values():
+            group_btn_set.update(gw.mod_buttons)
+
         for btn in self.modsButtons:
-            if btn.parent() == self.modsList:
+            if btn not in group_btn_set:
                 if btn.modClass.hash in matching_hashes:
-                    btn.restore(self.modsList)
+                    btn.show()
                 else:
-                    btn.remove()
+                    btn.hide()
 
 
     def toggleListPreviews(self):
@@ -1076,6 +1080,22 @@ class Mods(QWidget):
         replacements = []
         seen = set()
 
+        from ..utils.lang_reader import format_avatar_name
+        swf_names = getattr(modClass, 'swfNames', []) or []
+        file_names = getattr(modClass, 'fileNames', []) or []
+        sprite_names = getattr(modClass, 'spriteNames', []) or []
+
+        all_names = swf_names + file_names + sprite_names
+        for name in all_names:
+            n_low = name.lower()
+            if any(p in n_low for p in ['ui_avatars', 'sprites_avatars', 'avatar', 'cppscaler', 'flag1a', 'flag1b', 'flag1blong']):
+                formatted = format_avatar_name(name, lang_reader)
+                if formatted and formatted.lower() not in ['avatar', 'default', 'none']:
+                    item = f"{formatted} (Avatar)"
+                    if item not in seen:
+                        seen.add(item)
+                        replacements.append(item)
+
         sprites_to_process = modClass.spriteNames if hasattr(modClass, 'spriteNames') and modClass.spriteNames else []
 
         if not sprites_to_process:
@@ -1088,6 +1108,10 @@ class Mods(QWidget):
                     sprites_to_process.append(f"a_Torso_{clean}")
 
         for sprite in sprites_to_process:
+            s_low = sprite.lower()
+            if any(p in s_low for p in ['ui_avatars', 'sprites_avatars', 'avatar', 'cppscaler', 'flag1a', 'flag1b', 'flag1blong', 'a_flag']):
+                continue
+
             clean = sprite
             if clean.startswith("a_"):
                 clean = clean[2:]
