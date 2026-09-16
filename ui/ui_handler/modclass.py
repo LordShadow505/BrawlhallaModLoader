@@ -22,7 +22,8 @@ class ModClass:
                  swfNames: List[str] = None,
                  fileNames: List[str] = None,
                  spriteNames: List[str] = None,
-                 modPath: str = ""
+                 modPath: str = "",
+                 swfs: dict = None
                  ):
         self.gameVersion = gameVersion or ""
         self.name = name or ""
@@ -42,4 +43,5 @@ class ModClass:
         self.fileNames = fileNames or []
         self.spriteNames = spriteNames or []
         self.modPath = modPath or ""
+        self.swfs = swfs or {}
 

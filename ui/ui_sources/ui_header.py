@@ -1,16 +1,22 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'headerCAFuuo.ui'
+## Form generated from reading UI file 'header.ui'
 ##
-## Created by: Qt User Interface Compiler version 6.1.2
+## Created by: Qt User Interface Compiler version 6.5.0
 ##
 ## WARNING! All changes made in this file will be lost when recompiling UI file!
 ################################################################################
 
-from PySide6.QtCore import *  # type: ignore
-from PySide6.QtGui import *  # type: ignore
-from PySide6.QtWidgets import *  # type: ignore
+from PySide6.QtCore import (QCoreApplication, QDate, QDateTime, QLocale,
+    QMetaObject, QObject, QPoint, QRect,
+    QSize, QTime, QUrl, Qt)
+from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
+    QFont, QFontDatabase, QGradient, QIcon,
+    QImage, QKeySequence, QLinearGradient, QPainter,
+    QPalette, QPixmap, QRadialGradient, QTransform)
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QPushButton,
+    QSizePolicy, QVBoxLayout, QWidget)
 
 class Ui_Header(object):
     def setupUi(self, Header):
@@ -25,7 +31,7 @@ class Ui_Header(object):
         self.verticalLayout_2.setContentsMargins(0, 0, 0, 0)
         self.buttonsFrame = QFrame(Header)
         self.buttonsFrame.setObjectName(u"buttonsFrame")
-        self.buttonsFrame.setStyleSheet(u"background-color: #0a0a0c;")
+        self.buttonsFrame.setStyleSheet(u"background-color: #121317;")
         self.buttonsFrame.setFrameShape(QFrame.StyledPanel)
         self.buttonsFrame.setFrameShadow(QFrame.Raised)
         self.horizontalLayout = QHBoxLayout(self.buttonsFrame)
@@ -57,7 +63,9 @@ class Ui_Header(object):
         font.setBold(True)
         self.modsButton.setFont(font)
         self.modsButton.setCursor(QCursor(Qt.PointingHandCursor))
-        self.modsButton.setStyleSheet(u"QPushButton {\n    color: #eeeeee;\n}")
+        self.modsButton.setStyleSheet(u"QPushButton {\n"
+"    color: #eeeeee;\n"
+"}")
         self.modsButton.setCheckable(True)
         self.modsButton.setChecked(False)
 
@@ -90,7 +98,9 @@ class Ui_Header(object):
         self.gamebananaButton.setMinimumSize(QSize(0, 38))
         self.gamebananaButton.setFont(font)
         self.gamebananaButton.setCursor(QCursor(Qt.PointingHandCursor))
-        self.gamebananaButton.setStyleSheet(u"QPushButton {\n    color: #eeeeee;\n}")
+        self.gamebananaButton.setStyleSheet(u"QPushButton {\n"
+"    color: #eeeeee;\n"
+"}")
         self.gamebananaButton.setCheckable(True)
 
         self.verticalLayout_3.addWidget(self.gamebananaButton)
@@ -122,7 +132,9 @@ class Ui_Header(object):
         self.settingsButton.setMinimumSize(QSize(0, 38))
         self.settingsButton.setFont(font)
         self.settingsButton.setCursor(QCursor(Qt.PointingHandCursor))
-        self.settingsButton.setStyleSheet(u"QPushButton {\n    color: #eeeeee;\n}")
+        self.settingsButton.setStyleSheet(u"QPushButton {\n"
+"    color: #eeeeee;\n"
+"}")
         self.settingsButton.setCheckable(True)
 
         self.verticalLayout_4.addWidget(self.settingsButton)

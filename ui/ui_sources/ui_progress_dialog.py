@@ -1,17 +1,22 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'progress_dialogHeKZmR.ui'
+## Form generated from reading UI file 'progress_dialog.ui'
 ##
-## Created by: Qt User Interface Compiler version 6.1.2
+## Created by: Qt User Interface Compiler version 6.5.0
 ##
 ## WARNING! All changes made in this file will be lost when recompiling UI file!
 ################################################################################
 
-from PySide6.QtCore import *  # type: ignore
-from PySide6.QtGui import *  # type: ignore
-from PySide6.QtWidgets import *  # type: ignore
-
+from PySide6.QtCore import (QCoreApplication, QDate, QDateTime, QLocale,
+    QMetaObject, QObject, QPoint, QRect,
+    QSize, QTime, QUrl, Qt)
+from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
+    QFont, QFontDatabase, QGradient, QIcon,
+    QImage, QKeySequence, QLinearGradient, QPainter,
+    QPalette, QPixmap, QRadialGradient, QTransform)
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
+    QProgressBar, QSizePolicy, QVBoxLayout, QWidget)
 
 class Ui_ProgressDialog(object):
     def setupUi(self, ProgressDialog):
@@ -26,7 +31,7 @@ class Ui_ProgressDialog(object):
         self.background = QFrame(ProgressDialog)
         self.background.setObjectName(u"background")
         self.background.setStyleSheet(u"QFrame#background{\n"
-"background-color: #990a0a0c;\n"
+"background-color: #991E2025;\n"
 "}")
         self.background.setFrameShape(QFrame.StyledPanel)
         self.background.setFrameShadow(QFrame.Raised)
@@ -36,7 +41,7 @@ class Ui_ProgressDialog(object):
         self.dialogBackground.setObjectName(u"dialogBackground")
         self.dialogBackground.setMinimumSize(QSize(500, 100))
         self.dialogBackground.setStyleSheet(u"QFrame#dialogBackground{\n"
-"background-color: #0a0a0c;\n"
+"background-color: #1E2025;\n"
 "border-radius: 7px;\n"
 "}\n"
 "QLabel{\n"

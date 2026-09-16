@@ -14,7 +14,11 @@
    <string>Form</string>
   </property>
   <property name="styleSheet">
-   <string notr="true">border: none;</string>
+   <string notr="true">QWidget{border: none;}
+QWidget#ModBody{background-color: #303136;}
+QLabel{color: #eeeeee;}
+QLineEdit{background-color: #00000000; color: #eeeeee;font: &quot;Roboto Medium&quot;;}
+QTextBrowser{background-color: #00000000; color: #eeeeee;font: &quot;Roboto Medium&quot;;}</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <property name="spacing">

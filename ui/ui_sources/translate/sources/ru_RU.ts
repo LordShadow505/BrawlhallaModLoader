@@ -15,7 +15,7 @@
     </message>
     <message>
         <location filename="../../header.ui" line="224"/>
-        <source>Gamebanana</source>
+        <source>GameBanana</source>
         <translation type="unfinished"></translation>
     </message>
     <message>

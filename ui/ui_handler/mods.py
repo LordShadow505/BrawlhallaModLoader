@@ -137,17 +137,20 @@ class Mods(QWidget):
     modsButtons: List[ModButton] = []
     wikiPreviewSignal = Signal(QPixmap, str, str)
 
-    def __init__(self, installMethod, uninstallMethod, reinstallMethod, deleteMethod, reloadMethod, openFolderMethod, uninstallAllMethod, toggleFavoriteMethod, sortCallback, savePresetMethod=None, deletePresetMethod=None, applyPresetMethod=None, editPresetMethod=None, reloadPresetMethod=None, modsPath: str = "", controllerGetter=None, bulkInstallMethod=None, bulkUninstallMethod=None):
+    def __init__(self, installMethod, uninstallMethod, reinstallMethod, deleteMethod, reloadMethod, openFolderMethod, uninstallAllMethod, toggleFavoriteMethod, sortCallback, savePresetMethod=None, deletePresetMethod=None, applyPresetMethod=None, editPresetMethod=None, reloadPresetMethod=None, modsPath: str = "", controllerGetter=None, bulkInstallMethod=None, bulkUninstallMethod=None, fixMethod=None):
         super().__init__()
 
         self.modsPath = modsPath
         self.controllerGetter = controllerGetter
         self.reloadMethod = reloadMethod
+        self.fixMethod = fixMethod
         self.bulkInstallMethod = bulkInstallMethod
         self.bulkUninstallMethod = bulkUninstallMethod
         self.modGroupsWidgets: Dict[str, QWidget] = {}
-        self.currentSortField = "Name"
-        self.currentSortReverse = False
+        from ..utils.config import LoaderConfig
+        _cfg = LoaderConfig()
+        self.currentSortField = _cfg.sortField
+        self.currentSortReverse = _cfg.sortReverse
 
 
         self.active_hover_slug = None
@@ -169,12 +172,66 @@ class Mods(QWidget):
         self.preview = None
         self.previews: List[QPixmap] = []
         self.previewsNavigate: List[NavigateButton] = [NavigateButton(n, self.setPreviewNum) for n in range(6)]
-        self.previewRatio = 1
+        SCROLLBAR_STYLE = """
+            QScrollBar:vertical {
+                border: none;
+                background: #2B2C32;
+                width: 7px;
+                margin: 0 0 0 0;
+                border-radius: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #616161;
+                min-height: 30px;
+                border-radius: 7px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #A1A1A1;
+            }
+            QScrollBar::handle:vertical:pressed {
+                background-color: #717171;
+            }
+            QScrollBar::sub-line:vertical {
+                border: none;
+                background: none;
+                height: 0px;
+            }
+            QScrollBar::add-line:vertical {
+                border: none;
+                background: none;
+                height: 0px;
+            }
+            QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical {
+                background: none;
+                border: none;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+                border: none;
+            }
+        """
 
         bodyWidget = QWidget()
+        bodyWidget.setObjectName("ModBody")
+        bodyWidget.setStyleSheet("background-color: #303136; border: none;")
         self.body = Ui_ModBody()
         self.body.setupUi(bodyWidget)
+        
+        self.ui.scrollBody.setStyleSheet(f"""
+            QScrollArea {{
+                background-color: #303136;
+                border: none;
+            }}
+            {SCROLLBAR_STYLE}
+        """)
+        self.ui.scrollBody.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.ui.scrollBody.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.ui.scrollBody.verticalScrollBar().setStyleSheet(SCROLLBAR_STYLE)
         self.ui.scrollBody.setWidget(bodyWidget)
+        
+        self.body.modDescription.verticalScrollBar().setStyleSheet(SCROLLBAR_STYLE)
+        self.ui.scrollModsList.verticalScrollBar().setStyleSheet(SCROLLBAR_STYLE)
+        self.ui.modBody.setStyleSheet("QFrame#modBody { background-color: #303136; border: none; }")
 
         self.ui.modBody.installEventFilter(self)
         self.modDescriptionsAndActionsLayout = self.body.modDescriptionsAndActions.layout()
@@ -325,6 +382,144 @@ class Mods(QWidget):
 
         self.modDescriptionsAndActionsLayout.insertWidget(2, self.warningFrame)
 
+        # EX Mod Warning Notice (Gold/Amber #FFA500)
+        self.exWarningFrame = QFrame()
+        self.exWarningFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
+        exWarningLayout = QHBoxLayout(self.exWarningFrame)
+        exWarningLayout.setContentsMargins(10, 6, 10, 6)
+        exWarningLayout.setSpacing(10)
+
+        exWarningIconLabel = QLabel()
+        exWarningIconLabel.setPixmap(get_tinted_svg_pixmap(mod_warning_icon_path, "#FFA500", 18))
+        exWarningIconLabel.setStyleSheet("background: transparent; border: none; padding: 0px;")
+        exWarningLayout.addWidget(exWarningIconLabel)
+
+        exWarningTextLabel = QLabel(
+            "WARNING: This Mod is an EX-type mod. The official modloader may not support all features of this mod, "
+            "use the Unofficial Modloader to use it: "
+            "<a href=\"https://gamebanana.com/tools/20722\" style=\"color: #3498db; text-decoration: underline;\">https://gamebanana.com/tools/20722</a>"
+        )
+        exWarningTextLabel.setWordWrap(True)
+        exWarningTextLabel.setOpenExternalLinks(True)
+        exWarningTextLabel.setStyleSheet("color: #FFA500; font-size: 10px; font-weight: bold; border: none; background: transparent;")
+        exWarningLayout.addWidget(exWarningTextLabel, 1)
+
+        self.modDescriptionsAndActionsLayout.insertWidget(3, self.exWarningFrame)
+        self.exWarningFrame.hide()
+
+        # Hand Mod Warning Notice (Gold/Amber #FFA500)
+        self.handWarningFrame = QFrame()
+        self.handWarningFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
+        handWarningLayout = QHBoxLayout(self.handWarningFrame)
+        handWarningLayout.setContentsMargins(10, 6, 10, 6)
+        handWarningLayout.setSpacing(10)
+
+        handWarningIconLabel = QLabel()
+        handWarningIconLabel.setPixmap(get_tinted_svg_pixmap(mod_warning_icon_path, "#FFA500", 18))
+        handWarningIconLabel.setStyleSheet("background: transparent; border: none; padding: 0px;")
+        handWarningLayout.addWidget(handWarningIconLabel)
+
+        handWarningTextLabel = QLabel(
+            "WARNING: Hand mods are experimental and may stop working in the future or contain bugs/glitches. If something doesn't work, reinstall the mod or verify game files via Steam."
+        )
+        handWarningTextLabel.setWordWrap(True)
+        handWarningTextLabel.setStyleSheet("color: #FFA500; font-size: 10px; font-weight: bold; border: none; background: transparent;")
+        handWarningLayout.addWidget(handWarningTextLabel, 1)
+
+        self.modDescriptionsAndActionsLayout.insertWidget(4, self.handWarningFrame)
+        self.handWarningFrame.hide()
+
+        # Color Mod Warning Notice (Gold/Amber #FFA500)
+        self.colorWarningFrame = QFrame()
+        self.colorWarningFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
+        colorWarningLayout = QHBoxLayout(self.colorWarningFrame)
+        colorWarningLayout.setContentsMargins(10, 6, 10, 6)
+        colorWarningLayout.setSpacing(10)
+
+        colorWarningIconLabel = QLabel()
+        colorWarningIconLabel.setPixmap(get_tinted_svg_pixmap(mod_warning_icon_path, "#FFA500", 18))
+        colorWarningIconLabel.setStyleSheet("background: transparent; border: none; padding: 0px;")
+        colorWarningLayout.addWidget(colorWarningIconLabel)
+
+        colorWarningTextLabel = QLabel(
+            "WARNING: Color mods are experimental and may stop working in the future. If something doesn't work, reinstall the mod or verify game files via Steam."
+        )
+        colorWarningTextLabel.setWordWrap(True)
+        colorWarningTextLabel.setStyleSheet("color: #FFA500; font-size: 10px; font-weight: bold; border: none; background: transparent;")
+        colorWarningLayout.addWidget(colorWarningTextLabel, 1)
+
+        self.modDescriptionsAndActionsLayout.insertWidget(5, self.colorWarningFrame)
+        self.colorWarningFrame.hide()
+
+        # ── SECURITY SECTION (English) ────────────────────────────────────────
+        self.securitySectionFrame = QFrame()
+        self.securitySectionFrame.setStyleSheet("background-color: #16171a; border-radius: 6px; border: 1px solid #27272a; margin: 4px 0px;")
+        secOuterLayout = QVBoxLayout(self.securitySectionFrame)
+        secOuterLayout.setContentsMargins(10, 8, 10, 8)
+        secOuterLayout.setSpacing(6)
+
+        secHeaderLayout = QHBoxLayout()
+        secHeaderLayout.setContentsMargins(0, 0, 0, 0)
+        secHeaderLayout.setSpacing(6)
+        secHeaderIcon = QLabel()
+        secHeaderIcon.setPixmap(get_tinted_svg_pixmap(mod_warning_icon_path, "#a1a1aa", 14))
+        secHeaderIcon.setStyleSheet("background: transparent; border: none; padding: 0px;")
+        secHeaderLayout.addWidget(secHeaderIcon)
+        secHeaderTitle = QLabel("SECURITY")
+        secHeaderTitle.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: bold; border: none; background: transparent; letter-spacing: 0.5px;")
+        secHeaderLayout.addWidget(secHeaderTitle)
+        secHeaderLayout.addStretch()
+        secOuterLayout.addLayout(secHeaderLayout)
+
+        # Badges container
+        self.secBadgesFrame = QFrame()
+        self.secBadgesFrame.setStyleSheet("background: transparent; border: none;")
+        self.secBadgesLayout = QHBoxLayout(self.secBadgesFrame)
+        self.secBadgesLayout.setContentsMargins(0, 0, 0, 0)
+        self.secBadgesLayout.setSpacing(8)
+        self.secBadgesLayout.setAlignment(Qt.AlignLeft)
+        secOuterLayout.addWidget(self.secBadgesFrame)
+
+        # Status text
+        self.secStatusDescLabel = QLabel()
+        self.secStatusDescLabel.setWordWrap(True)
+        self.secStatusDescLabel.setStyleSheet("color: #94a3b8; font-size: 10px; border: none; background: transparent;")
+        secOuterLayout.addWidget(self.secStatusDescLabel)
+
+        # Expandable threat details toggle button
+        self.secDetailsToggleBtn = QPushButton("Show Details ▼")
+        self.secDetailsToggleBtn.setCursor(Qt.PointingHandCursor)
+        self.secDetailsToggleBtn.setStyleSheet("""
+            QPushButton {
+                color: #f87171;
+                font-size: 10px;
+                font-weight: bold;
+                background: transparent;
+                border: none;
+                text-align: left;
+                padding: 2px 0px;
+            }
+            QPushButton:hover {
+                color: #ef4444;
+                text-decoration: underline;
+            }
+        """)
+        self.secDetailsToggleBtn.clicked.connect(self._toggleSecurityDetails)
+        self.secDetailsToggleBtn.hide()
+        secOuterLayout.addWidget(self.secDetailsToggleBtn)
+
+        # Threat details container
+        self.secDetailsContainer = QFrame()
+        self.secDetailsContainer.setStyleSheet("background-color: #1e1113; border: 1px solid #7f1d1d; border-radius: 4px;")
+        self.secDetailsLayout = QVBoxLayout(self.secDetailsContainer)
+        self.secDetailsLayout.setContentsMargins(8, 6, 8, 6)
+        self.secDetailsLayout.setSpacing(4)
+        self.secDetailsContainer.hide()
+        secOuterLayout.addWidget(self.secDetailsContainer)
+
+        # Add Security Section below mod description
+        self.modDescriptionsAndActionsLayout.addWidget(self.securitySectionFrame)
+
         # Replaces Info Card Frame (Electric Blue #526eff)
         self.replacesFrame = QFrame()
         self.replacesFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
@@ -363,33 +558,8 @@ class Mods(QWidget):
         self.replacesListLabel.viewport().installEventFilter(self)
         replacesOuterLayout.addWidget(self.replacesListLabel)
 
-        self.modDescriptionsAndActionsLayout.insertWidget(3, self.replacesFrame)
+        self.modDescriptionsAndActionsLayout.insertWidget(6, self.replacesFrame)
         self.replacesFrame.hide()
-
-        # EX Mod Warning Notice (Gold/Amber #FFA500)
-        self.exWarningFrame = QFrame()
-        self.exWarningFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
-        exWarningLayout = QHBoxLayout(self.exWarningFrame)
-        exWarningLayout.setContentsMargins(10, 6, 10, 6)
-        exWarningLayout.setSpacing(10)
-
-        exWarningIconLabel = QLabel()
-        exWarningIconLabel.setPixmap(get_tinted_svg_pixmap(mod_warning_icon_path, "#FFA500", 18))
-        exWarningIconLabel.setStyleSheet("background: transparent; border: none; padding: 0px;")
-        exWarningLayout.addWidget(exWarningIconLabel)
-
-        exWarningTextLabel = QLabel(
-            "WARNING: This Mod is an EX-type mod. The official modloader may not support all features of this mod, "
-            "use the Unofficial Modloader to use it: "
-            "<a href=\"https://gamebanana.com/tools/20722\" style=\"color: #3498db; text-decoration: underline;\">https://gamebanana.com/tools/20722</a>"
-        )
-        exWarningTextLabel.setWordWrap(True)
-        exWarningTextLabel.setOpenExternalLinks(True)
-        exWarningTextLabel.setStyleSheet("color: #FFA500; font-size: 10px; font-weight: bold; border: none; background: transparent;")
-        exWarningLayout.addWidget(exWarningTextLabel, 1)
-
-        self.modDescriptionsAndActionsLayout.insertWidget(4, self.exWarningFrame)
-        self.exWarningFrame.hide()
 
         modsListFrame = QFrame()
         layout = QVBoxLayout(modsListFrame)
@@ -423,12 +593,41 @@ class Mods(QWidget):
         AddButtonWidthToTexSize(self.modsActions.reinstall, 40)
         AddButtonWidthToTexSize(self.modsActions.update, 40)
         AddButtonWidthToTexSize(self.modsActions.deleteMod, 40)
+        AddButtonWidthToTexSize(self.modsActions.fixMod, 40)
+
+        icons_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "ui_sources", "resources", "icons"))
+        fix_icon_svg_path = os.path.join(icons_dir, "FixIcon.svg")
+        fix_icon_png_path = os.path.join(icons_dir, "FixIcon.png")
+        if os.path.exists(fix_icon_svg_path):
+            self.modsActions.fixMod.setIcon(QIcon(fix_icon_svg_path))
+        elif os.path.exists(fix_icon_png_path):
+            self.modsActions.fixMod.setIcon(QIcon(fix_icon_png_path))
+        else:
+            self.modsActions.fixMod.setIcon(QIcon(":/icons/resources/icons/FixIcon.png"))
+        self.modsActions.fixMod.setIconSize(QSize(22, 22))
+        self.modsActions.fixMod.setText("Fix")
+        self.modsActions.fixMod.setStyleSheet("""
+            QPushButton {
+                background-color: #3396CD;
+                border-radius: 14px;
+                color: #eeeeee;
+                font: 500 11pt "Roboto Medium";
+            }
+            QPushButton:hover {
+                background-color: #3ba7e3;
+            }
+            QPushButton:pressed {
+                background-color: #2b7fae;
+            }
+        """)
 
         self.modsActions.install.clicked.connect(installMethod)
         self.modsActions.uninstall.clicked.connect(uninstallMethod)
         self.modsActions.reinstall.clicked.connect(reinstallMethod)
         self.modsActions.deleteMod.clicked.connect(deleteMethod)
         self.modsActions.deleteMod.setIcon(QIcon(":/icons/resources/icons/Delete.png"))
+        if fixMethod:
+            self.modsActions.fixMod.clicked.connect(fixMethod)
         
         self.ui.reloadModsList.clicked.connect(reloadMethod)
         self.ui.openModsFolderButton.clicked.connect(openFolderMethod)
@@ -443,7 +642,6 @@ class Mods(QWidget):
         self.ui.uninstallAllMods.clicked.connect(uninstallAllMethod)
         
         # New Group Button (NewGroup.svg icon only)
-        icons_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "ui_sources", "resources", "icons"))
         new_group_icon_path = os.path.join(icons_dir, "NewGroup.svg")
         move_group_icon_path = os.path.join(icons_dir, "MoveToGroup.svg")
 
@@ -477,8 +675,6 @@ class Mods(QWidget):
         self.ui.deleteAllMods.setIcon(QIcon(":/icons/resources/icons/Delete.png"))
         self.ui.deleteAllMods.setToolTip("Delete all mods from list")
 
-
-
         self.savePresetMethod = savePresetMethod
         self.deletePresetMethod = deletePresetMethod
         self.applyPresetMethod = applyPresetMethod
@@ -496,10 +692,10 @@ class Mods(QWidget):
         self.presetsBarFrame = QFrame(self.ui.modsList)
         self.presetsBarFrame.setMinimumSize(QSize(0, 36))
         self.presetsBarFrame.setMaximumSize(QSize(16777215, 36))
-        self.presetsBarFrame.setStyleSheet("background-color: #111113; border-bottom: 1px solid #1E1F24;")
+        self.presetsBarFrame.setStyleSheet("background-color: #1D1E20; border-bottom: 1px solid #2B2C30;")
         self.presetsBarLayout = QHBoxLayout(self.presetsBarFrame)
-        self.presetsBarLayout.setContentsMargins(4, 3, 4, 3)
-        self.presetsBarLayout.setSpacing(4)
+        self.presetsBarLayout.setContentsMargins(6, 4, 6, 4)
+        self.presetsBarLayout.setSpacing(5)
 
         # Presets Combo Box (Compact width capped at 130px)
         self.presetCombo = QComboBox(self.presetsBarFrame)
@@ -508,16 +704,16 @@ class Mods(QWidget):
         self.presetCombo.setCursor(Qt.PointingHandCursor)
         self.presetCombo.setStyleSheet("""
             QComboBox {
-                background-color: #1A1B1F;
+                background-color: #2B2C32;
                 color: #FFFFFF;
-                border: 1px solid #33343A;
+                border: 1px solid #3E4048;
                 border-radius: 4px;
                 padding: 2px 6px;
                 font-size: 11px;
             }
             QComboBox::drop-down { border: none; }
             QComboBox QAbstractItemView {
-                background-color: #151518;
+                background-color: #1D1E20;
                 color: #FFFFFF;
                 selection-background-color: #24638C;
             }
@@ -525,6 +721,9 @@ class Mods(QWidget):
         self.presetCombo.setToolTip("Select or apply a mod preset profile")
         self.presetCombo.currentIndexChanged.connect(self.onPresetComboChanged)
         self.presetsBarLayout.addWidget(self.presetCombo, 0)
+
+        # Preset tool buttons with 4px border-radius
+        btn_style = "QPushButton { background-color: #2B2C32; border: 1px solid #3E4048; border-radius: 4px; } QPushButton:hover { background-color: #3B3D44; } QPushButton:pressed { background-color: #24638C; }"
 
         # Save Preset Button (Save.svg)
         self.savePresetBtn = QPushButton(self.presetsBarFrame)
@@ -536,7 +735,7 @@ class Mods(QWidget):
             self.savePresetBtn.setIcon(QIcon(":/icons/resources/icons/Save.png"))
         self.savePresetBtn.setIconSize(QSize(16, 16))
         self.savePresetBtn.setToolTip("Save Current Installed Mods as Preset")
-        self.savePresetBtn.setStyleSheet("QPushButton { background-color: #1A1B1F; border: 1px solid #33343A; border-radius: 8px; } QPushButton:hover { background-color: #2A2C32; }")
+        self.savePresetBtn.setStyleSheet(btn_style)
         self.savePresetBtn.clicked.connect(self.onSavePresetClicked)
         self.presetsBarLayout.addWidget(self.savePresetBtn)
 
@@ -548,7 +747,7 @@ class Mods(QWidget):
             self.editPresetBtn.setIcon(QIcon(edit_icon_path))
         self.editPresetBtn.setIconSize(QSize(16, 16))
         self.editPresetBtn.setToolTip("Rename Selected Preset Profile")
-        self.editPresetBtn.setStyleSheet("QPushButton { background-color: #1A1B1F; border: 1px solid #33343A; border-radius: 8px; } QPushButton:hover { background-color: #2A2C32; }")
+        self.editPresetBtn.setStyleSheet(btn_style)
         self.editPresetBtn.clicked.connect(self.onEditPresetClicked)
         self.presetsBarLayout.addWidget(self.editPresetBtn)
 
@@ -560,7 +759,7 @@ class Mods(QWidget):
             self.reloadPresetBtn.setIcon(QIcon(reload_icon_path))
         self.reloadPresetBtn.setIconSize(QSize(16, 16))
         self.reloadPresetBtn.setToolTip("Re-apply / Sync Selected Preset")
-        self.reloadPresetBtn.setStyleSheet("QPushButton { background-color: #1A1B1F; border: 1px solid #33343A; border-radius: 8px; } QPushButton:hover { background-color: #2A2C32; }")
+        self.reloadPresetBtn.setStyleSheet(btn_style)
         self.reloadPresetBtn.clicked.connect(self.onReloadPresetClicked)
         self.presetsBarLayout.addWidget(self.reloadPresetBtn)
 
@@ -574,7 +773,7 @@ class Mods(QWidget):
             self.deletePresetBtn.setIcon(QIcon(":/icons/resources/icons/Delete.png"))
         self.deletePresetBtn.setIconSize(QSize(16, 16))
         self.deletePresetBtn.setToolTip("Delete Selected Preset Profile")
-        self.deletePresetBtn.setStyleSheet("QPushButton { background-color: #1A1B1F; border: 1px solid #33343A; border-radius: 8px; } QPushButton:hover { background-color: #3A1B1B; }")
+        self.deletePresetBtn.setStyleSheet("QPushButton { background-color: #2B2C32; border: 1px solid #3E4048; border-radius: 4px; } QPushButton:hover { background-color: #552222; }")
         self.deletePresetBtn.clicked.connect(self.onDeletePresetClicked)
         self.presetsBarLayout.addWidget(self.deletePresetBtn)
 
@@ -592,8 +791,8 @@ class Mods(QWidget):
                 color: #FFFFFF;
                 font-weight: bold;
                 font-size: 11px;
-                border-radius: 8px;
-                padding: 4px 8px;
+                border-radius: 14px;
+                padding: 4px 12px;
                 border: none;
             }
             QPushButton:hover { background-color: #27AE60; }
@@ -624,6 +823,10 @@ class Mods(QWidget):
 
         AddToFrame(self.body.modActions, actionsWidget)
 
+        from ..utils.config import LoaderConfig
+        cfg = LoaderConfig()
+        self.currentSortField = cfg.sortField
+        self.currentSortReverse = cfg.sortReverse
         self.nameSortReverse = False
         self.dateSortReverse = True
 
@@ -1023,11 +1226,26 @@ class Mods(QWidget):
     def getModReplacements(self, modClass: ModClass) -> List[str]:
         from ..utils.config import LoaderConfig
         from ..utils.lang_reader import get_global_lang_reader, get_cached_replacements, set_cached_replacements
+        from ..utils.tags_helper import detect_special_mod_types
+
+        # Check for Special Mod Types (Hand Mod & Color Mod) replacements
+        is_hand_spec, is_color_spec, hand_targets_spec, color_targets_spec = detect_special_mod_types(modClass)
 
         # Hash-based cache: compute once per mod, reuse on every select click
         cached = get_cached_replacements(modClass.hash)
-        if cached is not None:
-            return cached
+        if cached is not None and len(cached) > 0:
+            replacements = list(cached)
+            if is_color_spec and color_targets_spec:
+                for ct in color_targets_spec:
+                    item = f"Replaces: {ct} (Color Scheme)"
+                    if item not in replacements:
+                        replacements.append(item)
+            if is_hand_spec and hand_targets_spec:
+                for ht in hand_targets_spec:
+                    item = f"{ht} (Hand Mod)"
+                    if item not in replacements:
+                        replacements.append(item)
+            return replacements
 
         config = LoaderConfig()
         bh_path = config.brawlhallaPath
@@ -1143,8 +1361,32 @@ class Mods(QWidget):
                 seen.add(item)
                 replacements.append(item)
 
+        # Check for Special Mod Types (Hand Mod & Color Mod) replacements
+        from ..utils.tags_helper import detect_special_mod_types
+        is_hand_spec, is_color_spec, hand_targets_spec, color_targets_spec = detect_special_mod_types(modClass)
+
+        if is_color_spec and color_targets_spec:
+            for ct in color_targets_spec:
+                item = f"Replaces: {ct} (Color Scheme)"
+                if item not in seen:
+                    seen.add(item)
+                    replacements.append(item)
+
+        if is_hand_spec and hand_targets_spec:
+            for ht in hand_targets_spec:
+                item = f"{ht} (Hand Mod)"
+                if item not in seen:
+                    seen.add(item)
+                    replacements.append(item)
+
         set_cached_replacements(modClass.hash, replacements)
         return replacements
+
+    def _toggleSecurityDetails(self):
+        if hasattr(self, 'secDetailsContainer') and hasattr(self, 'secDetailsToggleBtn'):
+            is_vis = self.secDetailsContainer.isVisible()
+            self.secDetailsContainer.setVisible(not is_vis)
+            self.secDetailsToggleBtn.setText("Hide Details ▲" if not is_vis else "Show Details ▼")
 
     def updateData(self):
         self.modsActions.webPage.setParent(None)
@@ -1153,6 +1395,7 @@ class Mods(QWidget):
         self.modsActions.reinstall.setParent(None)
         self.modsActions.update.setParent(None)
         self.modsActions.deleteMod.setParent(None)
+        self.modsActions.fixMod.setParent(None)
 
         if not self.selectedModButton or not self.modsButtons:
             self.body.modName.setText("Brawlhalla Mod Loader")
@@ -1167,6 +1410,10 @@ class Mods(QWidget):
                 self.replacesFrame.hide()
             if hasattr(self, 'exWarningFrame'):
                 self.exWarningFrame.hide()
+            if hasattr(self, 'handWarningFrame'):
+                self.handWarningFrame.hide()
+            if hasattr(self, 'colorWarningFrame'):
+                self.colorWarningFrame.hide()
             self.updateTagPills([])
             return
 
@@ -1182,6 +1429,12 @@ class Mods(QWidget):
 
         AddToFrame(self.modsActions.mainFrame, self.modsActions.deleteMod)
 
+        # Show Fix button for Color or Hand mods
+        from ..utils.tags_helper import detect_special_mod_types
+        is_hand_spec, is_color_spec, _, _ = detect_special_mod_types(modClass)
+        if (is_hand_spec or is_color_spec) and modClass.modFileExist:
+            AddToFrame(self.modsActions.mainFrame, self.modsActions.fixMod)
+
         import re
         is_ex = bool(re.search(r'\bEX\b', modClass.name, re.IGNORECASE))
         if is_ex:
@@ -1192,6 +1445,98 @@ class Mods(QWidget):
             self.body.modName.setStyleSheet("color: #eeeeee;")
             if hasattr(self, 'exWarningFrame'):
                 self.exWarningFrame.hide()
+
+        # Hand Mod & Color Mod Warning Toggles
+        from ..utils.tags_helper import detect_special_mod_types, check_ui_mainmenu_security
+        is_hand_mod, is_color_mod, _, _ = detect_special_mod_types(modClass)
+        sec_info = check_ui_mainmenu_security(modClass)
+
+        if hasattr(self, 'handWarningFrame'):
+            if is_hand_mod:
+                self.handWarningFrame.show()
+            else:
+                self.handWarningFrame.hide()
+        if hasattr(self, 'colorWarningFrame'):
+            if is_color_mod:
+                self.colorWarningFrame.show()
+            else:
+                self.colorWarningFrame.hide()
+
+        # Update Security Audit Section Badges
+        if hasattr(self, 'secBadgesLayout') and hasattr(self, 'secStatusDescLabel'):
+            while self.secBadgesLayout.count():
+                item = self.secBadgesLayout.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.deleteLater()
+
+            has_ui = sec_info.get("has_ui_mainmenu", False)
+            is_bmt = sec_info.get("is_certified", False) or getattr(modClass, "bmtCertified", False)
+            is_creator = getattr(modClass, "creatorCertified", False) or getattr(modClass, "author", "") == "Brawlhalla ModCreator"
+            threats = sec_info.get("threats", [])
+            is_suspicious = (sec_info.get("status") == "SUSPICIOUS") or bool(threats)
+
+            def _add_badge(label, dot_col, bg_col, bdr_col):
+                b_frame = QFrame()
+                b_frame.setFixedHeight(32)
+                b_frame.setStyleSheet(f"background-color: {bg_col}; border-radius: 5px; border: 1px solid {bdr_col};")
+                b_lay = QHBoxLayout(b_frame)
+                b_lay.setContentsMargins(10, 0, 10, 0)
+                b_lay.setSpacing(6)
+                d_lbl = QLabel("●")
+                d_lbl.setStyleSheet(f"color: {dot_col}; font-size: 9px; border: none; background: transparent;")
+                b_lay.addWidget(d_lbl)
+                t_lbl = QLabel(label)
+                t_lbl.setStyleSheet("color: #FFFFFF; font-size: 11px; font-weight: bold; border: none; background: transparent;")
+                b_lay.addWidget(t_lbl)
+                self.secBadgesLayout.addWidget(b_frame)
+
+            if is_suspicious:
+                _add_badge("Security Warning", "#ef4444", "#2c1215", "#ef4444")
+                self.secStatusDescLabel.setText(f"CRITICAL WARNING: {len(threats)} suspicious executable script(s) or pattern(s) detected.")
+                self.secStatusDescLabel.setStyleSheet("color: #ef4444; font-size: 10px; font-weight: bold; border: none; background: transparent;")
+
+                if hasattr(self, 'secDetailsLayout'):
+                    while self.secDetailsLayout.count():
+                        it = self.secDetailsLayout.takeAt(0)
+                        w = it.widget()
+                        if w:
+                            w.deleteLater()
+
+                    for t in threats:
+                        t_snip = t.get("snippet", "Suspicious Code")
+                        t_file = t.get("file", "UI_MainMenu.swf")
+                        t_desc = t.get("description", "Potential external process execution or unauthorized network activity.")
+                        t_lbl = QLabel(f"<span style='color: #ef4444; font-size: 10px;'>●</span> <b style='color: #fca5a5;'>{t_file}</b>: <code style='color: #fef08a; background: #2b1114; padding: 1px 4px; border-radius: 3px;'>{t_snip}</code><br><span style='color: #cbd5e1; font-size: 9px; padding-left: 8px;'>{t_desc}</span>")
+                        t_lbl.setWordWrap(True)
+                        t_lbl.setStyleSheet("color: #fca5a5; font-size: 10px; border: none; background: transparent; margin-bottom: 2px;")
+                        self.secDetailsLayout.addWidget(t_lbl)
+
+                if hasattr(self, 'secDetailsToggleBtn'):
+                    self.secDetailsToggleBtn.setText("Show Details ▼")
+                    self.secDetailsToggleBtn.show()
+                if hasattr(self, 'secDetailsContainer'):
+                    self.secDetailsContainer.hide()
+            else:
+                if hasattr(self, 'secDetailsToggleBtn'):
+                    self.secDetailsToggleBtn.hide()
+                if hasattr(self, 'secDetailsContainer'):
+                    self.secDetailsContainer.hide()
+
+                _add_badge("Mod Creator Certified", "#c084fc", "#221338", "#a855f7")
+
+                if is_bmt:
+                    _add_badge("BMT Certified", "#07c9d7", "#0c2429", "#07c9d7")
+                    self.secStatusDescLabel.setText("Official verified clean mod created with Brawlhalla Modding Toolkit.")
+                    self.secStatusDescLabel.setStyleSheet("color: #07c9d7; font-size: 10px; border: none; background: transparent;")
+                elif has_ui:
+                    _add_badge("Custom UI", "#94a3b8", "#1e293b", "#475569")
+                    self.secStatusDescLabel.setText("Clean files without BMT certification.")
+                    self.secStatusDescLabel.setStyleSheet("color: #94a3b8; font-size: 10px; border: none; background: transparent;")
+                else:
+                    _add_badge("Verified Safe Assets", "#34d399", "#06281e", "#10b981")
+                    self.secStatusDescLabel.setText("Standard game asset mod. Zero executable code risk.")
+                    self.secStatusDescLabel.setStyleSheet("color: #34d399; font-size: 10px; border: none; background: transparent;")
 
         self.setPreviewsPaths(modClass.previewsPaths)
         self.body.modName.setText(modClass.name)
@@ -1208,7 +1553,7 @@ class Mods(QWidget):
             import urllib.parse
             replaces_html = "<ul style='margin-top: 2px; margin-bottom: 2px; padding-left: 18px; color: #FFFFFF; font-size: 11px; list-style-type: disc; white-space: nowrap;'>"
             for item in replacements:
-                clean_name = item.split('(')[0].strip()
+                clean_name = item.split('(')[0].replace('Replaces:', '').strip()
                 slug = clean_name.replace(' ', '_').replace("'", "%27")
                 wiki_url = f"https://brawlhalla.wiki.gg/wiki/{slug}"
                 replaces_html += f"<li style='margin-bottom: 3px; color: #FFFFFF; white-space: nowrap;'><a href='{wiki_url}' style='color: #FFFFFF; text-decoration: none; white-space: nowrap;'>{item}</a></li>"
@@ -1598,7 +1943,8 @@ class Mods(QWidget):
                swfNames: List[str] = None,
                fileNames: List[str] = None,
                spriteNames: List[str] = None,
-               modPath: str = ""):
+               modPath: str = "",
+               swfs: dict = None):
 
         for path in previewsPaths:
             self.cachePreview(path)
@@ -1620,7 +1966,8 @@ class Mods(QWidget):
                        swfNames,
                        fileNames,
                        spriteNames,
-                       modPath=modPath)
+                       modPath=modPath,
+                       swfs=swfs)
 
         from ..utils.tags_helper import auto_detect_tags
         replacements = self.getModReplacements(mod)
@@ -1704,6 +2051,12 @@ class Mods(QWidget):
         self.currentSortField = field
         self.currentSortReverse = reverse
 
+        # Save sort state to persistent config
+        from ..utils.config import LoaderConfig
+        config = LoaderConfig()
+        config.sortField = field
+        config.sortReverse = reverse
+
         if self.sortCallback:
             self.sortCallback(field, reverse)
 
@@ -1711,8 +2064,6 @@ class Mods(QWidget):
         scroll_pos = scroll_bar.value()
 
         # Phase 1: Read configuration model from disk/cache
-        from ..utils.config import LoaderConfig
-        config = LoaderConfig()
         groups_dict = config.modGroups or {}
         raw_assignments = config.modGroupAssignments or {}
 
@@ -1849,7 +2200,7 @@ class Mods(QWidget):
                 wel_body = QLabel(
                     'It looks like there are no mods here yet. Why not look for some on '
                     '<a href="https://gamebanana.com/games/5704" style="color: #4DB6AC; text-decoration: underline;">GameBanana</a> or in the '
-                    '<a href="gamebanana_tab" style="color: #4DB6AC; text-decoration: underline;">GameBanana tab</a>?'
+                    '<a href="GameBanana_tab" style="color: #4DB6AC; text-decoration: underline;">GameBanana tab</a>?'
                 )
                 wel_body.setFont(QFont("Segoe UI", 10))
                 wel_body.setStyleSheet("color: #D0D0D0;")
@@ -1857,12 +2208,12 @@ class Mods(QWidget):
                 wel_body.setOpenExternalLinks(False)
 
                 def on_welcome_link_clicked(url):
-                    if url == "gamebanana_tab":
+                    if url == "GameBanana_tab":
                         try:
-                            if hasattr(self, 'main') and hasattr(self.main, 'setGamebananaScreen'):
-                                self.main.setGamebananaScreen()
-                            elif hasattr(self, 'main') and hasattr(self.main, 'header') and hasattr(self.main.header, 'headerGamebananaButton'):
-                                self.main.header.headerGamebananaButton.button.click()
+                            if hasattr(self, 'main') and hasattr(self.main, 'setGameBananaScreen'):
+                                self.main.setGameBananaScreen()
+                            elif hasattr(self, 'main') and hasattr(self.main, 'header') and hasattr(self.main.header, 'headerGameBananaButton'):
+                                self.main.header.headerGameBananaButton.button.click()
                         except Exception as e:
                             print(f"Error opening GameBanana tab: {e}")
                     else:
@@ -1926,6 +2277,7 @@ class Mods(QWidget):
 
         if self.selectedModButton:
             self.selectedModButton.select()
+
 
 
 

@@ -1,6 +1,35 @@
 import os
 import sys
 
+# Detect frozen/compiled binary: supports both PyInstaller (sys.frozen) and Nuitka (__compiled__)
+_is_nuitka = False
+try:
+    _is_nuitka = bool(__compiled__)  # noqa - defined by Nuitka at compile time
+except NameError:
+    pass
+
+if getattr(sys, 'frozen', False) or _is_nuitka:
+    if hasattr(sys, '_MEIPASS'):
+        _base_dir = sys._MEIPASS  # PyInstaller
+    else:
+        _base_dir = os.path.dirname(os.path.abspath(__file__))  # Nuitka
+    os.environ['PATH'] = _base_dir + os.pathsep + os.path.join(_base_dir, 'PySide6') + os.pathsep + os.path.join(_base_dir, 'shiboken6') + os.pathsep + os.environ.get('PATH', '')
+    if hasattr(os, 'add_dll_directory'):
+        try:
+            os.add_dll_directory(_base_dir)
+        except Exception:
+            pass
+        for _sub in ['PySide6', 'shiboken6']:
+            _sub_dir = os.path.join(_base_dir, _sub)
+            if os.path.isdir(_sub_dir):
+                try:
+                    os.add_dll_directory(_sub_dir)
+                except Exception:
+                    pass
+    # SetDllDirectoryW would replace the normal DLL search path and can hide
+    # the installed Java runtime from JPype in Nuitka one-file builds.
+
+
 class NullWriter:
     def write(self, s): pass
     def flush(self): pass
@@ -9,6 +38,7 @@ if sys.stdout is None:
     sys.stdout = NullWriter()
 if sys.stderr is None:
     sys.stderr = NullWriter()
+
 
 import ssl
 try:
@@ -99,8 +129,8 @@ except Exception as e:
     print(f"Error importing core: {CORE_IMPORT_ERROR}")
     traceback.print_exc()
 from PySide6.QtCore import QSize, QTranslator, QLocale, QTimer, Signal, Qt
-from PySide6.QtGui import QIcon, QFontDatabase, QFont, QClipboard
-from PySide6.QtWidgets import QMainWindow, QApplication, QFrame, QVBoxLayout, QLabel
+from PySide6.QtGui import QIcon, QFontDatabase, QFont, QClipboard, QPixmap, QPainter, QColor
+from PySide6.QtWidgets import QMainWindow, QApplication, QFrame, QVBoxLayout, QLabel, QSplashScreen
 
 from ui.ui_handler.window import Window
 from ui.ui_handler.header import HeaderFrame
@@ -143,17 +173,75 @@ def format_size(size):
 
 
 SUPPORT_URL = "https://www.patreon.com/bhmodloader"
-
 PROGRAM_NAME = "Brawlhalla Mod Loader"
 
+GLOBAL_SPLASH = None
 
-def InitWindowSetText(text):
-    if getattr(sys, "frozen", False):
-        try:
-            import pyi_splash
-            pyi_splash.update_text(text)
-        except:
-            pass
+
+def close_nuitka_splash():
+    """Ensure Nuitka onefile bootloader splash is completely closed/hidden."""
+    # 1. Official Nuitka onefile splash dismissal using NUITKA_ONEFILE_PARENT environment variable
+    try:
+        if "NUITKA_ONEFILE_PARENT" in os.environ:
+            import tempfile
+            splash_filename = os.path.join(
+                tempfile.gettempdir(),
+                "onefile_%d_splash_feedback.tmp" % int(os.environ["NUITKA_ONEFILE_PARENT"]),
+            )
+            if os.path.exists(splash_filename):
+                try:
+                    os.unlink(splash_filename)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # 2. Native module fallback if available
+    try:
+        import onefile_splash
+        onefile_splash.close()
+    except Exception:
+        pass
+
+    # 3. Clean any remaining splash feedback tmp files in temp directory
+    try:
+        import tempfile, glob
+        temp_dir = tempfile.gettempdir()
+        for f in glob.glob(os.path.join(temp_dir, "onefile_*_splash_feedback.tmp")):
+            try:
+                os.unlink(f)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 4. Find and close any lingering Windows splash window with class "Splash"
+    try:
+        import win32gui, win32con
+        def enum_cb(hwnd, _):
+            if win32gui.GetClassName(hwnd) == "Splash":
+                win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+                win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+        win32gui.EnumWindows(enum_cb, None)
+    except Exception:
+        pass
+
+
+def set_global_splash(splash):
+    global GLOBAL_SPLASH
+    GLOBAL_SPLASH = splash
+
+
+def get_global_splash():
+    global GLOBAL_SPLASH
+    return GLOBAL_SPLASH
+
+
+def InitWindowSetText(text, delay_ms=120):
+    global GLOBAL_SPLASH
+    if GLOBAL_SPLASH is not None:
+        GLOBAL_SPLASH.set_status(str(text), delay_ms=delay_ms)
+
 
 def restart_app():
     # Kill background children before restarting
@@ -163,13 +251,15 @@ def restart_app():
 
 
 def InitWindowClose():
-    if getattr(sys, "frozen", False):
-        try:
-            import pyi_splash
-            pyi_splash.update_text("application")
-            pyi_splash.close()
-        except:
-            pass
+    global GLOBAL_SPLASH
+    if GLOBAL_SPLASH is not None:
+        InitWindowSetText("Ready!", delay_ms=80)
+        close_nuitka_splash()
+        if hasattr(ModLoader, 'app') and ModLoader.app:
+            GLOBAL_SPLASH.finish(ModLoader.app)
+        else:
+            GLOBAL_SPLASH.close()
+        GLOBAL_SPLASH = None
 
 
 def TerminateApp(exitId=0):
@@ -279,10 +369,12 @@ class ModLoader(QMainWindow):
         self.setAcceptDrops(True)
 
         self.config = LoaderConfig()
+        self.currentSortField = self.config.sortField
+        self.currentSortReverse = self.config.sortReverse
 
         QExecMainThread.init(self)
 
-        InitWindowSetText("ui")
+        InitWindowSetText("Loading user interface...")
 
         self.setWindowTitle(PROGRAM_NAME)
         self.setWindowIcon(QIcon(':/icons/resources/icons/App.ico'))
@@ -309,7 +401,8 @@ class ModLoader(QMainWindow):
                          modsPath=self.modsPath,
                          controllerGetter=lambda: getattr(self, 'controller', None),
                          bulkInstallMethod=self.bulkInstallMods,
-                         bulkUninstallMethod=self.bulkUninstallMods)
+                         bulkUninstallMethod=self.bulkUninstallMods,
+                         fixMethod=self.fixMod)
 
 
 
@@ -325,6 +418,10 @@ class ModLoader(QMainWindow):
         else:
             self.gamebanana = GameBananaFrame(modsPath=self.modsPath)
             self.gamebanana.downloadMod.connect(self.handleGameBananaDownload, Qt.QueuedConnection)
+
+        if hasattr(self, 'loading'):
+            self.loading.setStep(1, "success")
+            self.loading.setStep(2, "success")
 
         bhPath = "Not found"
         cacheSize = "0 B"
@@ -342,14 +439,14 @@ class ModLoader(QMainWindow):
             cacheSize=cacheSize
         )
         self.bulkOperationCount = 0
-        self.currentSortField = "Name"
-        self.currentSortReverse = False
+        self.currentSortField = getattr(self.config, 'sortField', 'Date') or 'Date'
+        self.currentSortReverse = getattr(self.config, 'sortReverse', True) if getattr(self.config, 'sortReverse', None) is not None else True
         self.reloadPending = False
 
         self.setLoadingScreen()
 
-        # self.resize(QSize(977, 550))
-        self.setMinimumSize(QSize(910, 550))
+        self.resize(QSize(926, 550))
+        self.setMinimumSize(QSize(926, 550))
 
         self.header.setModsButtonPressed(lambda: self.checkUnsavedSettings(self.setModsScreen))
         self.header.setGamebananaButtonPressed(lambda: self.checkUnsavedSettings(self.setGamebananaScreen))
@@ -376,7 +473,7 @@ class ModLoader(QMainWindow):
             self.controllerGetterTimer.start(10)
         else:
             err_str = str(CORE_IMPORT_ERROR).lower() if CORE_IMPORT_ERROR else ""
-            is_java_error = not CORE_IMPORT_ERROR or any(k in err_str for k in ["java not found", "_jpype", "jpype", "jvmnotfoundexception", "jvm"])
+            is_java_error = not CORE_IMPORT_ERROR or any(k in err_str for k in ["java not found", "jvmnotfoundexception"])
             if not is_java_error:
                 message = f"Error importing core:\n\n{CORE_IMPORT_ERROR}\n\nPlease check your installation."
             else:
@@ -395,10 +492,12 @@ class ModLoader(QMainWindow):
         self.__class__.app = self
 
     def runController(self):
-        self.loading.setText("Loading ModLoader Core")
+        InitWindowSetText("Initializing ModLoader Core...")
+        self.loading.setStep(3, "active")
 
         self.controller = core.Controller()
         self.controller.setModsPath(self.modsPath)
+        self.loading.setStep(3, "success")
         
         # Sync custom brawlhalla path to core
         if self.config.brawlhallaPath:
@@ -407,6 +506,7 @@ class ModLoader(QMainWindow):
             if hasattr(core, 'worker') and hasattr(core.worker, 'brawlhalla'):
                 core.worker.brawlhalla.BRAWLHALLA_PATH = self.config.brawlhallaPath
             
+        InitWindowSetText("Scanning installed and source mods...")
         if self.controller and hasattr(self.controller, 'reloadMods'):
             self.controller.reloadMods()
         self.controller.getModsData()
@@ -441,7 +541,10 @@ class ModLoader(QMainWindow):
 
             if ntype == NotificationType.LoadingMod:
                 modPath = notification.args[0]
-                self.loading.setText(f"Loading mod '{modPath or 'from cache'}'")
+                m_label = os.path.splitext(os.path.basename(modPath))[0] if modPath else "mod"
+                self.loading.setMod(modPath)
+                InitWindowSetText(f"Loading mod: {m_label}...")
+                InitWindowSetText(f"Loading mod: {m_label}...")
 
             elif ntype == NotificationType.ModElementsCount:
                 modHash, count = notification.args
@@ -687,11 +790,15 @@ class ModLoader(QMainWindow):
                                  swfNames=modData.get("swfNames", []),
                                  fileNames=modData.get("fileNames", []),
                                  spriteNames=modData.get("spriteNames", []),
-                                 modPath=modData.get("modPath", ""))
+                                 modPath=modData.get("modPath", ""),
+                                 swfs=modData.get("swfs", {}))
 
             FlowTracer.log("applySort_start", "At end of GetModsData")
             self.mods.applySort(self.currentSortField, self.currentSortReverse)
             FlowTracer.log("applySort_end", "Finished applySort in GetModsData")
+            if hasattr(self, 'loading'):
+                self.loading.setStep(4, "success", "Mods loaded")
+                self.loading.setStep(5, "success")
             self.setModsScreen()
             self.showErrorNotifications()
 
@@ -989,6 +1096,30 @@ class ModLoader(QMainWindow):
     def bulkInstallMods(self, hashes: List[str]):
         if not hashes:
             return
+
+        # Double verification: filter out color mods that replace non-paid color schemes
+        from ui.utils.tags_helper import validate_color_mod_schemes
+        valid_hashes = []
+        for h in hashes:
+            m_obj = self.mods.mods.get(h)
+            if m_obj:
+                is_v, _, _ = validate_color_mod_schemes(m_obj)
+                if is_v:
+                    valid_hashes.append(h)
+                else:
+                    print(f"[SECURITY] Blocked non-paid color mod '{m_obj.name}' from bulk install.")
+            else:
+                valid_hashes.append(h)
+
+        if not valid_hashes and hashes:
+            self.showError(
+                "Community Guidelines Violation",
+                "Cannot install color mods that replace non-paid color schemes of the game due to community guidelines."
+            )
+            return
+
+        hashes = valid_hashes
+
         if hasattr(self, 'controller') and self.controller:
             self.bulkTotalCount = len(hashes)
             self.bulkCompletedCount = 0
@@ -999,6 +1130,17 @@ class ModLoader(QMainWindow):
             self.progressDialog.setContent("Starting...")
             self.progressDialog.show()
             for h in hashes:
+                m_obj = self.mods.mods.get(h)
+                if m_obj and m_obj.modPath and os.path.exists(m_obj.modPath):
+                    from ui.utils.tags_helper import detect_special_mod_types
+                    is_hand_spec, is_color_spec, _, _ = detect_special_mod_types(m_obj)
+                    if is_hand_spec or is_color_spec:
+                        try:
+                            from core.utils.carrier_relinker import relink_mod_file
+                            bh_path = getattr(core.worker.brawlhalla, 'BRAWLHALLA_PATH', None) if (hasattr(core, 'worker') and hasattr(core.worker, 'brawlhalla')) else None
+                            relink_mod_file(m_obj.modPath, bh_path)
+                        except Exception as _e:
+                            print(f"[BulkInstall] Auto-relink warning: {_e}")
                 self.controller.getModConflict(h)
 
     def bulkUninstallMods(self, hashes: List[str]):
@@ -1307,6 +1449,28 @@ class ModLoader(QMainWindow):
             targetHash = self.mods.selectedModButton.modClass.hash
 
         if targetHash:
+            mod_obj = self.mods.mods.get(targetHash)
+            if mod_obj:
+                from ui.utils.tags_helper import validate_color_mod_schemes, detect_special_mod_types
+                is_valid, _, err_msg = validate_color_mod_schemes(mod_obj)
+                if not is_valid:
+                    self.showError(
+                        "Community Guidelines Violation",
+                        err_msg or "Cannot install color mods that replace non-paid color schemes of the game due to community guidelines."
+                    )
+                    return
+
+                # Auto-fix color/hand mod variables before installation
+                is_hand_spec, is_color_spec, _, _ = detect_special_mod_types(mod_obj)
+                print(f"[Loader DEBUG] Installing mod: '{mod_obj.name}' (hash: {targetHash}) | hand_spec={is_hand_spec}, color_spec={is_color_spec}", flush=True)
+                if (is_hand_spec or is_color_spec) and mod_obj.modPath and os.path.exists(mod_obj.modPath):
+                    try:
+                        from core.utils.carrier_relinker import relink_mod_file
+                        ok, count, msg = relink_mod_file(mod_obj.modPath, bh_path)
+                        print(f"[Loader DEBUG] Auto-relink before install result: ok={ok}, count={count}, msg='{msg}'", flush=True)
+                    except Exception as _e:
+                        print(f"[InstallMod] Auto-relink warning: {_e}", flush=True)
+
             if self.bulkOperationCount <= 0:
                 self.bulkOperationCount = 1
             self.controller.getModConflict(targetHash)
@@ -1347,6 +1511,14 @@ class ModLoader(QMainWindow):
             
         if self.mods.selectedModButton is not None:
             modClass = self.mods.selectedModButton.modClass
+            from ui.utils.tags_helper import validate_color_mod_schemes
+            is_valid, _, err_msg = validate_color_mod_schemes(modClass)
+            if not is_valid:
+                self.showError(
+                    "Community Guidelines Violation",
+                    err_msg or "Cannot install color mods that replace non-paid color schemes of the game due to community guidelines."
+                )
+                return
             self.controller.uninstallMod(modClass.hash)
             self.controller.getModConflict(modClass.hash)
 
@@ -1366,6 +1538,78 @@ class ModLoader(QMainWindow):
             self.buttonsDialog.addButton("Cancel", self.buttonsDialog.hide)
 
             self.buttonsDialog.show()
+
+    def fixMod(self):
+        if self.checkGameRunning():
+            return
+
+        bh_path = getattr(core.worker.brawlhalla, 'BRAWLHALLA_PATH', None) if (hasattr(core, 'worker') and hasattr(core.worker, 'brawlhalla')) else None
+
+        # Check target: selected mod OR all installed special mods
+        target_mods = []
+        if self.mods.selectedModButton is not None:
+            target_mods.append(self.mods.selectedModButton.modClass)
+        else:
+            from ui.utils.tags_helper import detect_special_mod_types
+            for m in self.mods.mods.values():
+                if getattr(m, 'installed', False):
+                    is_h, is_c, _, _ = detect_special_mod_types(m)
+                    if is_h or is_c:
+                        target_mods.append(m)
+
+        self.progressDialog.setMaximum(100)
+        self.progressDialog.setValue(30)
+        self.progressDialog.setTitle("Fixing Special Mods...")
+        self.progressDialog.setContent("Patching symbols table and verifying obfuscated constants...")
+        self.progressDialog.show()
+
+        def _worker():
+            try:
+                # 1. Update and patch symbols table in AppData and local assets
+                from core.utils.symbols_manager import resolve_and_update_symbols
+                resolve_and_update_symbols(brawlhalla_dir=bh_path, force=True, trigger="FixCommand")
+
+                # 2. Fix carrier symbols in live UI_MainMenu.swf
+                from core.utils.carrier_relinker import fix_hand_mod_symbols, relink_mod_file
+                fix_hand_mod_symbols(bh_dir=bh_path)
+
+                # 3. Relink all target mods
+                total_changes = 0
+                for tm in target_mods:
+                    if tm.modFileExist and tm.modPath and os.path.exists(tm.modPath):
+                        ok, cnt, _ = relink_mod_file(tm.modPath, bh_path)
+                        total_changes += cnt
+
+                self._onFixAllFinished(target_mods, True, total_changes, "")
+            except Exception as e:
+                print(f"[Fix Mod DEBUG] Exception during fix: {e}", flush=True)
+                self._onFixAllFinished(target_mods, False, 0, str(e))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    @QExecMainThread
+    def _onFixAllFinished(self, target_mods, ok: bool, count: int, msg: str):
+        self.progressDialog.hide()
+        if ok:
+            # Reinstall installed target mods to apply to game
+            for tm in target_mods:
+                if getattr(tm, 'installed', False):
+                    self.controller.uninstallMod(tm.hash)
+                    self.controller.getModConflict(tm.hash)
+            self.reloadMods()
+
+            self.buttonsDialog.setTitle("Symbols & Mods Repaired")
+            self.buttonsDialog.setContent(
+                TextFormatter.format(
+                    "<b>BrawlForge carrier and obfuscation symbols table have been successfully updated!</b><br><br>"
+                    "Hands and Colors mods have been synced to the current Brawlhalla build.",
+                    11
+                )
+            )
+            self.buttonsDialog.setButtons([("OK", self.buttonsDialog.hide)])
+            self.buttonsDialog.show()
+        else:
+            self.showError("Error Fixing Mods", msg)
 
     def getInstalledModNames(self):
         names = []
@@ -1725,7 +1969,7 @@ class ModLoader(QMainWindow):
                 QApplication.processEvents()
 
         if reload:
-            self.progressDialog.setTitle("Import mod from Gamebanana...")
+            self.progressDialog.setTitle("Import mod from GameBanana...")
             self.progressDialog.setContent("Download...")
             self.progressDialog.show()
 
@@ -1950,8 +2194,51 @@ class WIPFrame(QFrame):
 # venv\Lib\site-packages\PySide6\lrelease.exe E:\BrawlhallaModloaderApp_0.3\ui\ui_sources\translate\header\ru_RU.ts
 
 
+def GetLocalPath(path: str) -> str:
+    candidates = [
+        getattr(sys, '_MEIPASS', ''),
+        os.path.dirname(os.path.abspath(__file__)),
+        os.path.dirname(sys.executable),
+        os.path.abspath("."),
+    ]
+    for c in candidates:
+        if c:
+            p = os.path.join(c, path)
+            if os.path.exists(p):
+                return p
+    return os.path.join(os.path.abspath("."), path)
+
+
+class BmodsSplash(QSplashScreen):
+    """
+    QSplashScreen that renders real-time dynamic loading text
+    at fixed position (202, 302) using Bespoke font.
+    """
+    def __init__(self, pixmap: QPixmap, font_family: str):
+        super().__init__(pixmap, Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
+        self._font_family = font_family
+        self._status = ""
+
+    def set_status(self, text: str, delay_ms: int = 120):
+        self._status = text
+        self.repaint()
+        QApplication.processEvents()
+        if delay_ms > 0:
+            import time
+            time.sleep(delay_ms / 1000.0)
+            QApplication.processEvents()
+
+    def drawContents(self, painter: QPainter):
+        if not self._status:
+            return
+        font = QFont(self._font_family, 13)
+        painter.setFont(font)
+        painter.setPen(QColor("#CCCCCC"))
+        painter.drawText(202, 302, self._status)
+
+
 def RunApp():
-    app = QApplication(sys.argv)
+    app = QApplication.instance() or QApplication(sys.argv)
 
     font_db = QFontDatabase
     font_db.addApplicationFont(":/fonts/resources/fonts/Exo 2/Exo2-SemiBold.ttf")
@@ -1964,17 +2251,42 @@ def RunApp():
     font_db.addApplicationFont(":/fonts/resources/fonts/Roboto/Roboto-MediumItalic.ttf")
     font_db.addApplicationFont(":/fonts/resources/fonts/Roboto/Roboto-Regular.ttf")
 
-    """
-    translator = QTranslator()
-    lang = QLocale.system().name()
-    supportedLangs = translate.GetLangs()
-    if lang in supportedLangs:
-        translator.load(supportedLangs[lang])
-    app.installTranslator(translator)
-    """
+    # Load Bespoke font for splash
+    font_family = "Arial"
+    bespoke_candidates = [
+        GetLocalPath(os.path.join("ui", "ui_sources", "resources", "fonts", "Bespoke", "Bespoke.ttf")),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui", "ui_sources", "resources", "fonts", "Bespoke", "Bespoke.ttf"),
+    ]
+    for b_path in bespoke_candidates:
+        if os.path.exists(b_path):
+            f_id = font_db.addApplicationFont(b_path)
+            if f_id != -1:
+                fams = font_db.applicationFontFamilies(f_id)
+                if fams:
+                    font_family = fams[0]
+                    break
+
+    splash_candidates = [
+        GetLocalPath("splash.png"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "splash.png"),
+    ]
+    splash = get_global_splash()
+    if not splash:
+        for s_path in splash_candidates:
+            if os.path.exists(s_path):
+                pixmap = QPixmap(s_path)
+                if not pixmap.isNull():
+                    splash = BmodsSplash(pixmap, font_family)
+                    splash.show()
+                    set_global_splash(splash)
+                    break
+
+    InitWindowSetText("Loading core modules and mods...")
 
     window = ModLoader()
     window.show()
+
+    InitWindowClose()
 
     exitId = app.exec()
     TerminateApp(exitId)

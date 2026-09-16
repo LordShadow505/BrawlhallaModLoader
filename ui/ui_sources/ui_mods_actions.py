@@ -1,17 +1,22 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'mods_actionsnWYaPk.ui'
+## Form generated from reading UI file 'mods_actions.ui'
 ##
-## Created by: Qt User Interface Compiler version 6.1.2
+## Created by: Qt User Interface Compiler version 6.5.0
 ##
 ## WARNING! All changes made in this file will be lost when recompiling UI file!
 ################################################################################
 
-from PySide6.QtCore import *  # type: ignore
-from PySide6.QtGui import *  # type: ignore
-from PySide6.QtWidgets import *  # type: ignore
-
+from PySide6.QtCore import (QCoreApplication, QDate, QDateTime, QLocale,
+    QMetaObject, QObject, QPoint, QRect,
+    QSize, QTime, QUrl, Qt)
+from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
+    QFont, QFontDatabase, QGradient, QIcon,
+    QImage, QKeySequence, QLinearGradient, QPainter,
+    QPalette, QPixmap, QRadialGradient, QTransform)
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QPushButton,
+    QSizePolicy, QWidget)
 
 class Ui_ModsActions(object):
     def setupUi(self, ModsActions):
@@ -127,6 +132,21 @@ class Ui_ModsActions(object):
 
         self.horizontalLayout_2.addWidget(self.deleteMod)
 
+        self.fixMod = QPushButton(self.mainFrame)
+        self.fixMod.setObjectName(u"fixMod")
+        self.fixMod.setMinimumSize(QSize(90, 40))
+        self.fixMod.setFont(font)
+        self.fixMod.setCursor(QCursor(Qt.PointingHandCursor))
+        self.fixMod.setStyleSheet(u"background-color: #3396CD;\n"
+"border-radius: 14px;\n"
+"color: #eeeeee;")
+        icon6 = QIcon()
+        icon6.addFile(u":/icons/resources/icons/FixIcon.png", QSize(), QIcon.Normal, QIcon.Off)
+        self.fixMod.setIcon(icon6)
+        self.fixMod.setIconSize(QSize(22, 22))
+
+        self.horizontalLayout_2.addWidget(self.fixMod)
+
 
         self.horizontalLayout.addWidget(self.mainFrame, 0, Qt.AlignLeft)
 
@@ -138,10 +158,12 @@ class Ui_ModsActions(object):
 
     def retranslateUi(self, ModsActions):
         ModsActions.setWindowTitle(QCoreApplication.translate("ModsActions", u"Form", None))
-        self.webPage.setText(QCoreApplication.translate("ModsActions", u"  Web page", None))
-        self.install.setText(QCoreApplication.translate("ModsActions", u"  Install", None))
-        self.uninstall.setText(QCoreApplication.translate("ModsActions", u"  Uninstall", None))
-        self.reinstall.setText(QCoreApplication.translate("ModsActions", u"  Reinstall", None))
-        self.update.setText(QCoreApplication.translate("ModsActions", u"  Update", None))
-        self.deleteMod.setText(QCoreApplication.translate("ModsActions", u"  Delete", None))
+        self.webPage.setText(QCoreApplication.translate("ModsActions", u"WebPage", None))
+        self.install.setText(QCoreApplication.translate("ModsActions", u"Install", None))
+        self.uninstall.setText(QCoreApplication.translate("ModsActions", u"Uninstall", None))
+        self.reinstall.setText(QCoreApplication.translate("ModsActions", u"Reinstall", None))
+        self.update.setText(QCoreApplication.translate("ModsActions", u"Update", None))
+        self.deleteMod.setText(QCoreApplication.translate("ModsActions", u"Delete", None))
+        self.fixMod.setText(QCoreApplication.translate("ModsActions", u"Fix", None))
     # retranslateUi
+

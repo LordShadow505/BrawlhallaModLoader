@@ -90,7 +90,7 @@
         </property>
         <property name="styleSheet">
          <string notr="true">background-color: #3396CD;
-border-radius: 4px;
+border-radius: 14px;
 color: #eeeeee;</string>
         </property>
         <property name="text">
@@ -127,7 +127,7 @@ color: #eeeeee;</string>
         </property>
         <property name="styleSheet">
          <string notr="true">background-color: #43C15F;
-border-radius: 4px;
+border-radius: 14px;
 color: #eeeeee;</string>
         </property>
         <property name="text">
@@ -164,7 +164,7 @@ color: #eeeeee;</string>
         </property>
         <property name="styleSheet">
          <string notr="true">background-color: #00B9A3;
-border-radius: 4px;
+border-radius: 14px;
 color: #eeeeee;</string>
         </property>
         <property name="text">
@@ -201,7 +201,7 @@ color: #eeeeee;</string>
         </property>
         <property name="styleSheet">
          <string notr="true">background-color: #CD33C7;
-border-radius: 4px;
+border-radius: 14px;
 color: #eeeeee;</string>
         </property>
         <property name="text">
@@ -238,7 +238,7 @@ color: #eeeeee;</string>
         </property>
         <property name="styleSheet">
          <string notr="true">background-color: #833DBB;
-border-radius: 4px;
+border-radius: 14px;
 color: #eeeeee;</string>
         </property>
         <property name="text">
@@ -275,7 +275,7 @@ color: #eeeeee;</string>
         </property>
         <property name="styleSheet">
          <string notr="true">background-color: #FF5050;
-border-radius: 4px;
+border-radius: 14px;
 color: #eeeeee;</string>
         </property>
         <property name="text">
@@ -284,6 +284,43 @@ color: #eeeeee;</string>
         <property name="icon">
          <iconset resource="icons.qrc">
           <normaloff>:/icons/resources/icons/Delete.png</normaloff>:/icons/resources/icons/Delete.png</iconset>
+        </property>
+        <property name="iconSize">
+         <size>
+          <width>22</width>
+          <height>22</height>
+         </size>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="fixMod">
+        <property name="minimumSize">
+         <size>
+          <width>90</width>
+          <height>40</height>
+         </size>
+        </property>
+        <property name="font">
+         <font>
+          <family>Roboto Medium</family>
+          <pointsize>11</pointsize>
+         </font>
+        </property>
+        <property name="cursor">
+         <cursorShape>PointingHandCursor</cursorShape>
+        </property>
+        <property name="styleSheet">
+         <string notr="true">background-color: #3396CD;
+border-radius: 14px;
+color: #eeeeee;</string>
+        </property>
+        <property name="text">
+         <string>Fix</string>
+        </property>
+        <property name="icon">
+         <iconset resource="icons.qrc">
+          <normaloff>:/icons/resources/icons/FixIcon.png</normaloff>:/icons/resources/icons/FixIcon.png</iconset>
         </property>
         <property name="iconSize">
          <size>

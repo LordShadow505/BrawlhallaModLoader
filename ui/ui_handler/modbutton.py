@@ -196,16 +196,28 @@ class ModButton(QWidget):
             path = ":/images/resources/images/DefaultPreview.png"
             if self.modClass.previewsPaths and len(self.modClass.previewsPaths) > 0:
                 p = self.modClass.previewsPaths[0]
-                if p and p != "None":
-                    path = p
+                if p and p != "None" and (p.startswith(":/") or os.path.exists(p)):
+                    path = p.replace("\\", "/")
                     
-            path = path.replace("\\", "/")
             if path not in self._thumbCache:
-                original_pixmap = QPixmap(path)
-                # Scale with KeepAspectRatio so it fits in 64x36, then QLabel centers it over black bg
-                self._thumbCache[path] = original_pixmap.scaled(64, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                try:
+                    pix = QPixmap(path)
+                    if not pix.isNull():
+                        self._thumbCache[path] = pix.scaled(64, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    else:
+                        def_pix = QPixmap(":/images/resources/images/DefaultPreview.png")
+                        if not def_pix.isNull():
+                            self._thumbCache[path] = def_pix.scaled(64, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                except Exception:
+                    pass
             
-            self.listPreviewLabel.setPixmap(self._thumbCache[path])
+            thumb = self._thumbCache.get(path)
+            if thumb and not thumb.isNull():
+                self.listPreviewLabel.setPixmap(thumb)
+            else:
+                def_pix = QPixmap(":/images/resources/images/DefaultPreview.png")
+                if not def_pix.isNull():
+                    self.listPreviewLabel.setPixmap(def_pix.scaled(64, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         else:
             self.previewContainer.hide()
 
@@ -222,7 +234,7 @@ class ModButton(QWidget):
         versionWidth = self.ui.gameVersion.fontMetrics().boundingRect(self.ui.gameVersion.text()).width()
 
         # Calculate current offset caused by margins, star, spacing, and status icon
-        base_offset = 80 
+        base_offset = 88 
         
         preview_offset = 0
         if hasattr(self, 'previewContainer') and not self.previewContainer.isHidden():
@@ -230,16 +242,23 @@ class ModButton(QWidget):
 
         total_offset = base_offset + versionWidth + preview_offset
 
+        viewport_width = parent.viewport().width() if hasattr(parent, 'viewport') else parent.width()
+        # Account for group container indentation if inside a group
+        group_indent = 20 if getattr(self, 'group_id', None) else 0
+        effective_width = viewport_width - group_indent
+
+        max_name_w = max(60, effective_width - total_offset)
         elided = self.ui.modName.fontMetrics().elidedText(self.modClass.name,
-                                                           Qt.ElideRight, parent.width() - total_offset)
+                                                           Qt.ElideRight, max_name_w)
         self.ui.modName.setText(elided)
-        self.ui.modName.setMaximumWidth(parent.width() - total_offset)
+        self.ui.modName.setMaximumWidth(max_name_w)
 
         author_offset = base_offset + preview_offset
+        max_author_w = max(60, effective_width - author_offset)
         elided_author = self.ui.modAuthor.fontMetrics().elidedText(f"Author: {self.modClass.author}",
-                                                            Qt.ElideRight, parent.width() - author_offset)
+                                                            Qt.ElideRight, max_author_w)
         self.ui.modAuthor.setText(elided_author)
-        self.ui.modAuthor.setMaximumWidth(parent.width() - author_offset)
+        self.ui.modAuthor.setMaximumWidth(max_author_w)
 
     def select(self):
         if self.pressed:
@@ -248,16 +267,26 @@ class ModButton(QWidget):
             for button in self.buttons:
                 if button.pressed:
                     button.pressed = False
-                    styleSheet = button.ui.background.styleSheet()
-                    bgColor = re.findall(r"background-color: #FF(.+);", styleSheet)[0]
-                    button.ui.background.setStyleSheet(
-                        styleSheet.replace(f"#FF{bgColor}", f"#00{bgColor}").replace(f"#FE{bgColor}", f"#77{bgColor}"))
+                    button.ui.background.setStyleSheet("""
+                        QFrame#background{
+                            background-color: #00232A8A;
+                            border-radius: 5px;
+                        }
+                        QFrame:hover#background{
+                            background-color: #77232A8A;
+                        }
+                    """)
 
             self.pressed = True
-            ss = self.ui.background.styleSheet()
-            bgColor = re.findall(r"background-color: #00(.+);", ss)[0]
-            self.ui.background.setStyleSheet(
-                ss.replace(f"#00{bgColor}", f"#FF{bgColor}").replace(f"#77{bgColor}", f"#FE{bgColor}"))
+            self.ui.background.setStyleSheet("""
+                QFrame#background{
+                    background-color: #FF232A8A;
+                    border-radius: 5px;
+                }
+                QFrame:hover#background{
+                    background-color: #FE232A8A;
+                }
+            """)
 
             self.method(self.modClass)
 

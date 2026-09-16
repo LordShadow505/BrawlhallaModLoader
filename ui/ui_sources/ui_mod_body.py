@@ -1,24 +1,34 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'mod_bodytmznKp.ui'
+## Form generated from reading UI file 'mod_body.ui'
 ##
-## Created by: Qt User Interface Compiler version 6.1.2
+## Created by: Qt User Interface Compiler version 6.5.0
 ##
 ## WARNING! All changes made in this file will be lost when recompiling UI file!
 ################################################################################
 
-from PySide6.QtCore import *  # type: ignore
-from PySide6.QtGui import *  # type: ignore
-from PySide6.QtWidgets import *  # type: ignore
-
+from PySide6.QtCore import (QCoreApplication, QDate, QDateTime, QLocale,
+    QMetaObject, QObject, QPoint, QRect,
+    QSize, QTime, QUrl, Qt)
+from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
+    QFont, QFontDatabase, QGradient, QIcon,
+    QImage, QKeySequence, QLinearGradient, QPainter,
+    QPalette, QPixmap, QRadialGradient, QTransform)
+from PySide6.QtWidgets import (QAbstractScrollArea, QApplication, QFrame, QHBoxLayout,
+    QLabel, QLayout, QPushButton, QSizePolicy,
+    QTextBrowser, QTextEdit, QVBoxLayout, QWidget)
 
 class Ui_ModBody(object):
     def setupUi(self, ModBody):
         if not ModBody.objectName():
             ModBody.setObjectName(u"ModBody")
         ModBody.resize(547, 481)
-        ModBody.setStyleSheet(u"border: none;")
+        ModBody.setStyleSheet(u"QWidget{border: none;}\n"
+"QWidget#ModBody{background-color: #303136;}\n"
+"QLabel{color: #eeeeee;}\n"
+"QLineEdit{background-color: #00000000; color: #eeeeee;font: \"Roboto Medium\";}\n"
+"QTextBrowser{background-color: #00000000; color: #eeeeee;font: \"Roboto Medium\";}")
         self.verticalLayout = QVBoxLayout(ModBody)
         self.verticalLayout.setSpacing(0)
         self.verticalLayout.setObjectName(u"verticalLayout")
@@ -264,7 +274,7 @@ class Ui_ModBody(object):
         ModBody.setWindowTitle(QCoreApplication.translate("ModBody", u"Form", None))
         self.leftPreview.setText("")
         self.rightPreview.setText("")
-        self.modName.setText(QCoreApplication.translate("ModBody", u"Brawlhalla Mod Loader", None))
+        self.modName.setText(QCoreApplication.translate("ModBody", u"Brawlhalla Modloader", None))
         self.modSource.setText(QCoreApplication.translate("ModBody", u"Source:", None))
         self.modVersion.setText(QCoreApplication.translate("ModBody", u"Version:", None))
         self.modPreview.setText("")

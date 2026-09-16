@@ -16,7 +16,9 @@ class LoaderConfig:
             "brawlhallaPath": "",
             "modsPath": "",
             "favorites": [],
-            "showListPreviews": True
+            "showListPreviews": True,
+            "sortField": "Date",
+            "sortReverse": True
         }
         
         if os.path.exists(self.config_path):
@@ -31,8 +33,10 @@ class LoaderConfig:
 
     def _save(self):
         try:
-            from main import FlowTracer
-            FlowTracer.log("LoaderConfig._save", f"modGroups keys: {list(self.data.get('modGroups', {}).keys())}")
+            import sys
+            main_mod = sys.modules.get('main')
+            if main_mod and hasattr(main_mod, 'FlowTracer'):
+                main_mod.FlowTracer.log("LoaderConfig._save", f"modGroups keys: {list(self.data.get('modGroups', {}).keys())}")
         except Exception: pass
         os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
 
@@ -129,5 +133,23 @@ class LoaderConfig:
     @modGroupAssignments.setter
     def modGroupAssignments(self, value):
         self.data["modGroupAssignments"] = value
+        self._save()
+
+    @property
+    def sortField(self):
+        return self.data.get("sortField", self.defaults["sortField"])
+
+    @sortField.setter
+    def sortField(self, value):
+        self.data["sortField"] = value
+        self._save()
+
+    @property
+    def sortReverse(self):
+        return self.data.get("sortReverse", self.defaults["sortReverse"])
+
+    @sortReverse.setter
+    def sortReverse(self, value):
+        self.data["sortReverse"] = value
         self._save()
 

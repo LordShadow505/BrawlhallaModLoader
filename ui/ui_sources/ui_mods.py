@@ -1,17 +1,23 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'modsUNiHUf.ui'
+## Form generated from reading UI file 'mods.ui'
 ##
-## Created by: Qt User Interface Compiler version 6.1.2
+## Created by: Qt User Interface Compiler version 6.5.0
 ##
 ## WARNING! All changes made in this file will be lost when recompiling UI file!
 ################################################################################
 
-from PySide6.QtCore import *  # type: ignore
-from PySide6.QtGui import *  # type: ignore
-from PySide6.QtWidgets import *  # type: ignore
-
+from PySide6.QtCore import (QCoreApplication, QDate, QDateTime, QLocale,
+    QMetaObject, QObject, QPoint, QRect,
+    QSize, QTime, QUrl, Qt)
+from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
+    QFont, QFontDatabase, QGradient, QIcon,
+    QImage, QKeySequence, QLinearGradient, QPainter,
+    QPalette, QPixmap, QRadialGradient, QTransform)
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLineEdit,
+    QPushButton, QScrollArea, QSizePolicy, QSplitter,
+    QVBoxLayout, QWidget)
 
 class Ui_Mods(object):
     def setupUi(self, Mods):
@@ -89,7 +95,7 @@ class Ui_Mods(object):
         self.scrollModsList.setObjectName(u"scrollModsList")
         self.scrollModsList.setStyleSheet(u"QScrollBar:vertical {         \n"
 "    border: none;\n"
-"    background: #111113;\n"
+"    background: #2B2C32;\n"
 "    width: 7px;\n"
 "    margin: 0 0 0 0;\n"
 "    border-radius: 0px;\n"
@@ -228,9 +234,9 @@ class Ui_Mods(object):
         self.modsSortButton.setSizePolicy(sizePolicy)
         self.modsSortButton.setMinimumSize(QSize(30, 30))
         self.modsSortButton.setCursor(QCursor(Qt.PointingHandCursor))
-        icon4 = QIcon()
-        icon4.addFile(u":/icons/resources/icons/SortModsList.png", QSize(), QIcon.Normal, QIcon.Off)
-        self.modsSortButton.setIcon(icon4)
+        icon5 = QIcon()
+        icon5.addFile(u":/icons/resources/icons/SortModsList.png", QSize(), QIcon.Normal, QIcon.Off)
+        self.modsSortButton.setIcon(icon5)
 
         self.horizontalLayout_5.addWidget(self.modsSortButton)
 
@@ -238,9 +244,9 @@ class Ui_Mods(object):
         self.updateAllMods.setObjectName(u"updateAllMods")
         self.updateAllMods.setMinimumSize(QSize(30, 30))
         self.updateAllMods.setCursor(QCursor(Qt.PointingHandCursor))
-        icon5 = QIcon()
-        icon5.addFile(u":/icons/resources/icons/UpdateAllMods.png", QSize(), QIcon.Normal, QIcon.Off)
-        self.updateAllMods.setIcon(icon5)
+        icon6 = QIcon()
+        icon6.addFile(u":/icons/resources/icons/UpdateAllMods.png", QSize(), QIcon.Normal, QIcon.Off)
+        self.updateAllMods.setIcon(icon6)
 
         self.horizontalLayout_5.addWidget(self.updateAllMods)
 
@@ -248,9 +254,9 @@ class Ui_Mods(object):
         self.openModsFolderButton.setObjectName(u"openModsFolderButton")
         self.openModsFolderButton.setMinimumSize(QSize(30, 30))
         self.openModsFolderButton.setCursor(QCursor(Qt.PointingHandCursor))
-        icon6 = QIcon()
-        icon6.addFile(u":/icons/resources/icons/OpenModsFolder.png", QSize(), QIcon.Normal, QIcon.Off)
-        self.openModsFolderButton.setIcon(icon6)
+        icon7 = QIcon()
+        icon7.addFile(u":/icons/resources/icons/OpenModsFolder.png", QSize(), QIcon.Normal, QIcon.Off)
+        self.openModsFolderButton.setIcon(icon7)
 
         self.horizontalLayout_5.addWidget(self.openModsFolderButton)
 
@@ -270,7 +276,7 @@ class Ui_Mods(object):
         self.modBody.setSizePolicy(sizePolicy1)
         self.modBody.setMinimumSize(QSize(0, 0))
         self.modBody.setStyleSheet(u"QFrame{\n"
-"background-color: #1c1c1f;\n"
+"background-color: #303136;\n"
 "}")
         self.modBody.setFrameShape(QFrame.StyledPanel)
         self.modBody.setFrameShadow(QFrame.Raised)
@@ -282,7 +288,7 @@ class Ui_Mods(object):
         self.scrollBody.setObjectName(u"scrollBody")
         self.scrollBody.setStyleSheet(u"QScrollBar:vertical {         \n"
 "    border: none;\n"
-"    background: #111113;\n"
+"    background: #2B2C32;\n"
 "    width: 7px;\n"
 "    margin: 0 0 0 0;\n"
 "    border-radius: 0px;\n"

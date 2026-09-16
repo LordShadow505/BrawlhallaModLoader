@@ -45,6 +45,8 @@
     <file>resources/icons/DownloadMod.png</file>
     <file>resources/icons/Preview.png</file>
     <file>resources/icons/PreviewActive.png</file>
+    <file>resources/icons/FixIcon.png</file>
+    <file>resources/icons/FixIcon.svg</file>
   </qresource>
   <qresource prefix="fonts">
     <file>resources/fonts/Exo 2/Exo2-SemiBold.ttf</file>

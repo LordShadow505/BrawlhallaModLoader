@@ -1,5 +1,31 @@
 import os
 import sys
+
+# Detect frozen/compiled binary: supports both PyInstaller (sys.frozen) and Nuitka (__compiled__)
+_is_nuitka = False
+try:
+    _is_nuitka = bool(__compiled__)  # noqa - defined by Nuitka at compile time
+except NameError:
+    pass
+
+if getattr(sys, 'frozen', False) or _is_nuitka:
+    if hasattr(sys, '_MEIPASS'):
+        _base_dir = sys._MEIPASS  # PyInstaller
+    else:
+        _base_dir = os.path.dirname(os.path.abspath(__file__))  # Nuitka
+    os.environ['PATH'] = _base_dir + os.pathsep + os.environ.get('PATH', '')
+    if hasattr(os, 'add_dll_directory'):
+        try:
+            os.add_dll_directory(_base_dir)
+        except Exception:
+            pass
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetDllDirectoryW(_base_dir)
+    except Exception:
+        pass
+
+
 import json
 import time
 import socket
@@ -13,6 +39,7 @@ CONFIG = {"clientHash": "",  "modLoaderPath": ""}
 MODLOADER_CLIENT = "ModLoaderClient.exe"
 
 FROZEN = getattr(sys, 'frozen', False)
+
 
 
 class Commands:

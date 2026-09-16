@@ -52,11 +52,11 @@ background-color: #00000000;</string>
     <widget class="QFrame" name="background">
      <property name="styleSheet">
       <string notr="true">QFrame#background{
-background-color: #0024638C;
-border-radius: 5;
+background-color: #00232A8A;
+border-radius: 5px;
 }
 QFrame:hover#background{
-background-color: #7724638C;
+background-color: #77232A8A;
 }</string>
      </property>
      <property name="frameShape">
