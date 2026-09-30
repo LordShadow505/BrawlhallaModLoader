@@ -1625,6 +1625,11 @@ class Mods(QWidget):
             (getattr(modClass, "spriteNames", []) or [])
         )]
         inferred = []
+        # External Wwise assets are represented in Core metadata as ordinary
+        # game files.  Expose a stable, searchable tag for both banks and
+        # loose WEM files instead of relying on the mod author's tag list.
+        if any(str(name).casefold().endswith((".bnk", ".wem")) for name in (getattr(modClass, "fileNames", []) or [])):
+            inferred.append("Sounds")
         if any(any(token in name for token in ("ui_", "menu", "hud", "avatar")) for name in names):
             inferred.append("UI")
         if any(any(token in name for token in ("bones", "sfx")) for name in names):
@@ -2409,7 +2414,7 @@ class Mods(QWidget):
             self.bulkInstallMethod(hashes)
         else:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Error", "No se puede instalar: el núcleo del ModLoader no está disponible.")
+            QMessageBox.warning(self, "Error", "Cannot install: the ModLoader core is unavailable.")
 
     def uninstall_all_in_group(self, group_id: str):
         gw = self.modGroupsWidgets.get(group_id)
@@ -2422,7 +2427,7 @@ class Mods(QWidget):
             self.bulkUninstallMethod(hashes)
         else:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Error", "No se puede desinstalar: el núcleo del ModLoader no está disponible.")
+            QMessageBox.warning(self, "Error", "Cannot uninstall: the ModLoader core is unavailable.")
 
     def get_or_create_group_widget(self, group_id: str, group_name: str, group_color: str = "", group_icon: str = ""):
         if group_id in self.modGroupsWidgets:

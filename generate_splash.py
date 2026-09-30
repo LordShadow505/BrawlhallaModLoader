@@ -30,7 +30,7 @@ OUTPUT_PRE_SPLASH = os.path.join(_SCRIPT_DIR, "pre_splash.png")
 # ──────────────────────────────────────────────────────────────────────────────
 # Version (fallback used when running as plain script)
 # ──────────────────────────────────────────────────────────────────────────────
-VERSION = "0.4.5"
+VERSION = "0.4.6"
 
 VERSION_TEXT_SIZE = 10   # pt
 VERSION_X         = 736  # px from left

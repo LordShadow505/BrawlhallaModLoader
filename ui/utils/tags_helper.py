@@ -84,6 +84,7 @@ CATEGORY_COLOR_MAP = {
     "bmt certified":     "#07c9d7", # Cyan
     "custom ui":         "#475569", # Slate
     "security warning":  "#ef4444", # Red
+    "sounds":           "#5a2f80", # Audio / Wwise assets
 }
 
 # Tag Normalization Map (Collapse Plurals & Singulars into single category)
@@ -103,6 +104,8 @@ TAG_NORMALIZATION = {
     "bmt certified":     "BMT Certified",
     "custom ui":         "Custom UI",
     "security warning":  "Security Warning",
+    "sound":             "Sounds",
+    "sounds":            "Sounds",
 }
 
 

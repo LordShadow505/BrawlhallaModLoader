@@ -153,6 +153,14 @@ except Exception as e:
     CORE_IMPORT_ERROR = f"{type(e).__name__}: {str(e)}"
     print(f"Error importing core: {CORE_IMPORT_ERROR}")
     traceback.print_exc()
+
+# Install the shared audio helper before loading or installing mods.  Audio
+# operations always resolve it from the shared cache through the core helper.
+if core is not None:
+    try:
+        core.ensure_runtime_audio_tool()
+    except Exception as e:
+        print(f"Warning: could not prepare wwiseutil.exe: {e}")
 from PySide6.QtCore import QSize, QTranslator, QLocale, QTimer, Signal, Qt
 from PySide6.QtGui import QIcon, QFontDatabase, QFont, QClipboard, QPixmap, QPainter, QColor
 from PySide6.QtWidgets import (QMainWindow, QApplication, QFrame, QVBoxLayout,
@@ -1103,6 +1111,9 @@ class ModLoader(QMainWindow):
                     string = (f"Could not load '{mod_path or '<cached mod>'}': {error_summary}\n\n"
                               f"{error_details}")
 
+                elif ntype == NotificationType.CompileModSourcesUnknownFile:
+                    string = f"Unknown file '{notif.args[1]}'"
+
                 # Installer
                 elif ntype == NotificationType.InstallingModNotFoundFileElement:
                     string = f"Not found element '{notif.args[1]}' in bmod "
@@ -1560,6 +1571,7 @@ class ModLoader(QMainWindow):
                         filename.startswith("core."),
                         filename.startswith("config_"),
                         filename == "files.json",
+                        filename.casefold() in {"wwiseutil.exe", "modloaderclient.exe"},
                         filename.endswith(".ico"),
                         filename.endswith(".png"),
                         filename.endswith(".reg")
