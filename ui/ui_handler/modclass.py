@@ -23,7 +23,10 @@ class ModClass:
                  fileNames: List[str] = None,
                  spriteNames: List[str] = None,
                  modPath: str = "",
-                 swfs: dict = None
+                 swfs: dict = None,
+                 bmtCertified: bool = False,
+                 bmtCert: dict = None,
+                 creatorCertified: bool = False
                  ):
         self.gameVersion = gameVersion or ""
         self.name = name or ""
@@ -44,4 +47,6 @@ class ModClass:
         self.spriteNames = spriteNames or []
         self.modPath = modPath or ""
         self.swfs = swfs or {}
-
+        self.bmtCertified = bool(bmtCertified)
+        self.bmtCert = bmtCert or {}
+        self.creatorCertified = bool(creatorCertified)

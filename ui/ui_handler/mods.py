@@ -4,8 +4,8 @@ import webbrowser
 from typing import List, Dict, Tuple
 
 from PySide6.QtWidgets import QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QComboBox, QInputDialog, QMessageBox, QDialog
-from PySide6.QtGui import QPixmap, QPaintEvent, QIcon, QCursor
-from PySide6.QtCore import QSize, Qt, QTimer, Signal, QObject
+from PySide6.QtGui import QPixmap, QPaintEvent, QIcon, QCursor, QTextDocument
+from PySide6.QtCore import QSize, Qt, QTimer, Signal, QObject, QPoint, QRect
 
 from .modbutton import ModButton
 from .modclass import ModClass
@@ -156,6 +156,14 @@ class Mods(QWidget):
         self.active_hover_slug = None
         self.ui = Ui_Mods()
         self.ui.setupUi(self)
+        # Keep both bottom action strips consistent with the dark UI.  The
+        # generated Qt frame style otherwise falls back to a light gray panel.
+        dark_action_bar = (
+            "QFrame { background-color: #1B1C20; border: none; }"
+        )
+        for action_frame in (self.ui.modsListActions, self.ui.modsBuildActions,
+                             self.ui.leftButtons, self.ui.rightButtons):
+            action_frame.setStyleSheet(dark_action_bar)
         self.toggleFavoriteMethod = toggleFavoriteMethod
         self.sortCallback = sortCallback
 
@@ -171,6 +179,11 @@ class Mods(QWidget):
 
         self.preview = None
         self.previews: List[QPixmap] = []
+        # The details panel can receive a resize event before a mod has been
+        # selected (the loader intentionally waits for explicit selection).
+        # Keep a safe 16:9 ratio available so that first-window resize never
+        # reads an attribute that has not been initialized yet.
+        self.previewRatio = 16 / 9
         self.previewsNavigate: List[NavigateButton] = [NavigateButton(n, self.setPreviewNum) for n in range(6)]
         SCROLLBAR_STYLE = """
             QScrollBar:vertical {
@@ -241,6 +254,7 @@ class Mods(QWidget):
 
         self.body.modTags.setOpenExternalLinks(False)
         self.body.modTags.linkActivated.connect(self.onTagLinkClicked)
+        self._initializeTagPills()
 
         self.body.modDescription.setOpenExternalLinks(True)
         self.body.modDescription.highlighted.connect(self.onReplacementHovered)
@@ -363,9 +377,13 @@ class Mods(QWidget):
 
         self.ui.scrollModsList.setWidget(modsListFrame)
 
+        # Warning cards keep their full text visible by default, but each one
+        # can be folded independently when the details panel gets crowded.
+        self._warningSections = []
+
         # Skin Warning Notice (Coral #FF7043)
         self.warningFrame = QFrame()
-        self.warningFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
+        self.warningFrame.setStyleSheet("background-color: #21191b; border-radius: 6px; border: 1px solid #3a2529; margin: 4px 0px;")
         warningLayout = QHBoxLayout(self.warningFrame)
         warningLayout.setContentsMargins(10, 6, 10, 6)
         warningLayout.setSpacing(10)
@@ -379,12 +397,13 @@ class Mods(QWidget):
         warningTextLabel.setWordWrap(True)
         warningTextLabel.setStyleSheet("color: #FF7043; font-size: 10px; font-weight: bold; border: none; background: transparent;")
         warningLayout.addWidget(warningTextLabel, 1)
+        self._addWarningToggle(self.warningFrame, warningLayout, warningTextLabel)
 
         self.modDescriptionsAndActionsLayout.insertWidget(2, self.warningFrame)
 
         # EX Mod Warning Notice (Gold/Amber #FFA500)
         self.exWarningFrame = QFrame()
-        self.exWarningFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
+        self.exWarningFrame.setStyleSheet("background-color: #211d17; border-radius: 6px; border: 1px solid #3a3020; margin: 4px 0px;")
         exWarningLayout = QHBoxLayout(self.exWarningFrame)
         exWarningLayout.setContentsMargins(10, 6, 10, 6)
         exWarningLayout.setSpacing(10)
@@ -403,13 +422,14 @@ class Mods(QWidget):
         exWarningTextLabel.setOpenExternalLinks(True)
         exWarningTextLabel.setStyleSheet("color: #FFA500; font-size: 10px; font-weight: bold; border: none; background: transparent;")
         exWarningLayout.addWidget(exWarningTextLabel, 1)
+        self._addWarningToggle(self.exWarningFrame, exWarningLayout, exWarningTextLabel)
 
         self.modDescriptionsAndActionsLayout.insertWidget(3, self.exWarningFrame)
         self.exWarningFrame.hide()
 
         # Hand Mod Warning Notice (Gold/Amber #FFA500)
         self.handWarningFrame = QFrame()
-        self.handWarningFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
+        self.handWarningFrame.setStyleSheet("background-color: #211d17; border-radius: 6px; border: 1px solid #3a3020; margin: 4px 0px;")
         handWarningLayout = QHBoxLayout(self.handWarningFrame)
         handWarningLayout.setContentsMargins(10, 6, 10, 6)
         handWarningLayout.setSpacing(10)
@@ -425,13 +445,14 @@ class Mods(QWidget):
         handWarningTextLabel.setWordWrap(True)
         handWarningTextLabel.setStyleSheet("color: #FFA500; font-size: 10px; font-weight: bold; border: none; background: transparent;")
         handWarningLayout.addWidget(handWarningTextLabel, 1)
+        self._addWarningToggle(self.handWarningFrame, handWarningLayout, handWarningTextLabel)
 
         self.modDescriptionsAndActionsLayout.insertWidget(4, self.handWarningFrame)
         self.handWarningFrame.hide()
 
         # Color Mod Warning Notice (Gold/Amber #FFA500)
         self.colorWarningFrame = QFrame()
-        self.colorWarningFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
+        self.colorWarningFrame.setStyleSheet("background-color: #211d17; border-radius: 6px; border: 1px solid #3a3020; margin: 4px 0px;")
         colorWarningLayout = QHBoxLayout(self.colorWarningFrame)
         colorWarningLayout.setContentsMargins(10, 6, 10, 6)
         colorWarningLayout.setSpacing(10)
@@ -447,13 +468,14 @@ class Mods(QWidget):
         colorWarningTextLabel.setWordWrap(True)
         colorWarningTextLabel.setStyleSheet("color: #FFA500; font-size: 10px; font-weight: bold; border: none; background: transparent;")
         colorWarningLayout.addWidget(colorWarningTextLabel, 1)
+        self._addWarningToggle(self.colorWarningFrame, colorWarningLayout, colorWarningTextLabel)
 
         self.modDescriptionsAndActionsLayout.insertWidget(5, self.colorWarningFrame)
         self.colorWarningFrame.hide()
 
         # ── SECURITY SECTION (English) ────────────────────────────────────────
         self.securitySectionFrame = QFrame()
-        self.securitySectionFrame.setStyleSheet("background-color: #16171a; border-radius: 6px; border: 1px solid #27272a; margin: 4px 0px;")
+        self.securitySectionFrame.setStyleSheet("background-color: #181a22; border-radius: 6px; border: 1px solid #292d3b; margin: 4px 0px;")
         secOuterLayout = QVBoxLayout(self.securitySectionFrame)
         secOuterLayout.setContentsMargins(10, 8, 10, 8)
         secOuterLayout.setSpacing(6)
@@ -471,6 +493,15 @@ class Mods(QWidget):
         secHeaderLayout.addStretch()
         secOuterLayout.addLayout(secHeaderLayout)
 
+        self.securityContentFrame = QFrame(self.securitySectionFrame)
+        self.securityContentFrame.setStyleSheet("background: transparent; border: none;")
+        secContentLayout = QVBoxLayout(self.securityContentFrame)
+        secContentLayout.setContentsMargins(0, 0, 0, 0)
+        secContentLayout.setSpacing(6)
+        self.securityCollapseToggle = self._addSectionToggle(
+            secHeaderLayout, self.securityContentFrame, "Collapse security section"
+        )
+
         # Badges container
         self.secBadgesFrame = QFrame()
         self.secBadgesFrame.setStyleSheet("background: transparent; border: none;")
@@ -478,13 +509,34 @@ class Mods(QWidget):
         self.secBadgesLayout.setContentsMargins(0, 0, 0, 0)
         self.secBadgesLayout.setSpacing(8)
         self.secBadgesLayout.setAlignment(Qt.AlignLeft)
-        secOuterLayout.addWidget(self.secBadgesFrame)
+        # These widgets are deliberately created once.  Recreating nested Qt
+        # layouts on every selection made the details panel race deferred
+        # deletions, which could leave the badges blank (and, on Windows,
+        # occasionally crash the Qt binding).
+        self._securityBadgeLabels = []
+        for _ in range(3):
+            badge = QFrame()
+            badge.setFixedHeight(32)
+            badge_layout = QHBoxLayout(badge)
+            badge_layout.setContentsMargins(10, 0, 10, 0)
+            badge_layout.setSpacing(6)
+            badge_dot = QLabel("●")
+            badge_dot.setStyleSheet("font-size: 9px; border: none; background: transparent;")
+            badge_text = QLabel()
+            badge_text.setStyleSheet("color: #ffffff; font-size: 11px; font-weight: bold; border: none; background: transparent;")
+            badge_layout.addWidget(badge_dot)
+            badge_layout.addWidget(badge_text)
+            badge.hide()
+            self.secBadgesLayout.addWidget(badge)
+            self._securityBadgeLabels.append((badge, badge_dot, badge_text))
+        self.secBadgesLayout.addStretch(1)
+        secContentLayout.addWidget(self.secBadgesFrame)
 
         # Status text
         self.secStatusDescLabel = QLabel()
         self.secStatusDescLabel.setWordWrap(True)
         self.secStatusDescLabel.setStyleSheet("color: #94a3b8; font-size: 10px; border: none; background: transparent;")
-        secOuterLayout.addWidget(self.secStatusDescLabel)
+        secContentLayout.addWidget(self.secStatusDescLabel)
 
         # Expandable threat details toggle button
         self.secDetailsToggleBtn = QPushButton("Show Details ▼")
@@ -506,7 +558,7 @@ class Mods(QWidget):
         """)
         self.secDetailsToggleBtn.clicked.connect(self._toggleSecurityDetails)
         self.secDetailsToggleBtn.hide()
-        secOuterLayout.addWidget(self.secDetailsToggleBtn)
+        secContentLayout.addWidget(self.secDetailsToggleBtn)
 
         # Threat details container
         self.secDetailsContainer = QFrame()
@@ -515,21 +567,22 @@ class Mods(QWidget):
         self.secDetailsLayout.setContentsMargins(8, 6, 8, 6)
         self.secDetailsLayout.setSpacing(4)
         self.secDetailsContainer.hide()
-        secOuterLayout.addWidget(self.secDetailsContainer)
+        secContentLayout.addWidget(self.secDetailsContainer)
+        secOuterLayout.addWidget(self.securityContentFrame)
 
         # Add Security Section below mod description
         self.modDescriptionsAndActionsLayout.addWidget(self.securitySectionFrame)
 
         # Replaces Info Card Frame (Electric Blue #526eff)
         self.replacesFrame = QFrame()
-        self.replacesFrame.setStyleSheet("background-color: #1A1B1E; border-radius: 6px; border: 1px solid #2B2C30; margin: 4px 0px;")
+        self.replacesFrame.setStyleSheet("background-color: #181b26; border-radius: 6px; border: 1px solid #2b3150; margin: 4px 0px;")
         replacesOuterLayout = QVBoxLayout(self.replacesFrame)
         replacesOuterLayout.setContentsMargins(10, 8, 10, 8)
         replacesOuterLayout.setSpacing(6)
 
-        replacesHeaderFrame = QFrame()
-        replacesHeaderFrame.setStyleSheet("background: transparent; border: none;")
-        replacesHeaderLayout = QHBoxLayout(replacesHeaderFrame)
+        self.replacesHeaderFrame = QFrame()
+        self.replacesHeaderFrame.setStyleSheet("background: transparent; border: none;")
+        replacesHeaderLayout = QHBoxLayout(self.replacesHeaderFrame)
         replacesHeaderLayout.setContentsMargins(0, 0, 0, 0)
         replacesHeaderLayout.setSpacing(8)
 
@@ -538,11 +591,24 @@ class Mods(QWidget):
         replacesIconLabel.setStyleSheet("background: transparent; border: none; padding: 0px;")
         replacesHeaderLayout.addWidget(replacesIconLabel)
 
-        replacesTitleLabel = QLabel("This Mod Replaces:")
-        replacesTitleLabel.setStyleSheet("color: #526eff; font-size: 11px; font-weight: bold; border: none; background: transparent;")
-        replacesHeaderLayout.addWidget(replacesTitleLabel, 1)
+        self.replacesTitleLabel = QLabel("This Mod Replaces:")
+        self.replacesTitleLabel.setStyleSheet("color: #526eff; font-size: 11px; font-weight: bold; border: none; background: transparent;")
+        self.replacesTitleLabel.setTextFormat(Qt.RichText)
+        self.replacesTitleLabel.setOpenExternalLinks(True)
+        self.replacesTitleLabel.linkHovered.connect(self.onReplacementHovered)
+        self.replacesTitleLabel.linkActivated.connect(self.hideWikiPreviewCard)
+        replacesHeaderLayout.addWidget(self.replacesTitleLabel, 1)
 
-        replacesOuterLayout.addWidget(replacesHeaderFrame)
+        replacesOuterLayout.addWidget(self.replacesHeaderFrame)
+
+        self.replacesContentFrame = QFrame(self.replacesFrame)
+        self.replacesContentFrame.setStyleSheet("background: transparent; border: none;")
+        replacesContentLayout = QVBoxLayout(self.replacesContentFrame)
+        replacesContentLayout.setContentsMargins(0, 0, 0, 0)
+        replacesContentLayout.setSpacing(2)
+        self.replacesCollapseToggle = self._addSectionToggle(
+            replacesHeaderLayout, self.replacesContentFrame, "Collapse requirements"
+        )
 
         from PySide6.QtWidgets import QTextBrowser
         from PySide6.QtGui import QTextOption
@@ -556,10 +622,32 @@ class Mods(QWidget):
         self.replacesListLabel.highlighted.connect(self.onReplacementHovered)
         self.replacesListLabel.anchorClicked.connect(self.hideWikiPreviewCard)
         self.replacesListLabel.viewport().installEventFilter(self)
-        replacesOuterLayout.addWidget(self.replacesListLabel)
+        replacesContentLayout.addWidget(self.replacesListLabel)
+        replacesOuterLayout.addWidget(self.replacesContentFrame)
 
         self.modDescriptionsAndActionsLayout.insertWidget(6, self.replacesFrame)
         self.replacesFrame.hide()
+
+        # Stable detail order: tags, action buttons, warnings/requirements,
+        # description, and security at the end.
+        detail_sections = (
+            self.tagsContainerFrame,
+            self.body.modActions,
+            self.warningFrame,
+            self.exWarningFrame,
+            self.handWarningFrame,
+            self.colorWarningFrame,
+            self.replacesFrame,
+            self.body.modDescription,
+            self.securitySectionFrame,
+        )
+        self.modDescriptionsAndActionsLayout.removeWidget(self.body.modTags)
+        self.body.modTags.hide()
+        for section in detail_sections:
+            self.modDescriptionsAndActionsLayout.removeWidget(section)
+        for index, section in enumerate(detail_sections):
+            alignment = Qt.AlignLeft | Qt.AlignTop if section is self.body.modActions else Qt.Alignment()
+            self.modDescriptionsAndActionsLayout.insertWidget(index, section, 0, alignment)
 
         modsListFrame = QFrame()
         layout = QVBoxLayout(modsListFrame)
@@ -818,6 +906,19 @@ class Mods(QWidget):
         self.ui.updateAllMods.setToolTip("Toggle List Previews")
         self.ui.updateAllMods.clicked.connect(self.toggleListPreviews)
         self.updateListPreviewsIcon()
+        self._preview_load_generation = 0
+        self._pending_preview_buttons = []
+        self._preview_preload_generation = 0
+        self._pending_preload_buttons = []
+        self._metadata_preload_generation = 0
+        self._pending_metadata_mods = []
+        # Detached rows are retained until process shutdown.  Releasing
+        # hundreds of cyclic PySide wrappers while multiprocessing.queue.get
+        # is active can crash inside the native binding on Windows.
+        self._retiredReloadWidgets = []
+        self.ui.scrollModsList.verticalScrollBar().valueChanged.connect(
+            lambda _value: self.queueVisibleListPreviews()
+        )
 
         self.ui.searchArea.textChanged.connect(self.searchEvent)
 
@@ -1025,12 +1126,16 @@ class Mods(QWidget):
         return super().eventFilter(watched, event)
 
     def onTagButtonClicked(self, tag_name: str):
-        self.ui.searchArea.setText(tag_name)
-        self.searchEvent(tag_name)
+        if self.ui.searchArea.text() == tag_name:
+            self.searchEvent(tag_name)
+        else:
+            # setText emits textChanged, which performs the search once.
+            self.ui.searchArea.setText(tag_name)
 
     def onTagLinkClicked(self, link: str):
         if link.startswith("tag:"):
-            tag_name = link[4:]
+            from urllib.parse import unquote
+            tag_name = unquote(link[4:])
             self.onTagButtonClicked(tag_name)
 
     def searchEvent(self, text):
@@ -1046,17 +1151,18 @@ class Mods(QWidget):
             return
 
         text = text.casefold().strip()
-        from ..utils.tags_helper import auto_detect_tags
+        from ..utils.lang_reader import get_cached_replacements
 
         matching_hashes = set()
         for modClass in self.mods.values():
-            replacements = self.getModReplacements(modClass)
-            auto_tags = auto_detect_tags(modClass, replacements)
-            modClass.tags = auto_tags
+            # Search must be metadata-only.  Parsing requirements or opening
+            # a legacy mod for every keystroke is what made tag clicks freeze.
+            replacements = get_cached_replacements(modClass.hash) or []
+            auto_tags = self._getFastTags(modClass, replacements)
             
             name_match = text in modClass.name.lower()
             author_match = text in modClass.author.lower()
-            version_match = modClass.gameVersion.lower().startswith(text)
+            version_match = modClass.gameVersion.casefold().startswith(text)
             tag_match = any(text in t.lower() for t in auto_tags)
             rep_match = any(text in r.lower() for r in replacements)
 
@@ -1096,10 +1202,142 @@ class Mods(QWidget):
         config.showListPreviews = not config.showListPreviews
         self.updateListPreviewsIcon()
         
-        # Update all visible mod buttons to show/hide the preview
+        if config.showListPreviews:
+            # Already-decoded thumbnails were skipped by the deferred loader,
+            # so explicitly make their containers visible again.
+            for modButton in self.modsButtons:
+                if getattr(modButton, "_listPreviewLoaded", False):
+                    modButton.previewContainer.show()
+                    modButton.onParentResize()
+            self.queueVisibleListPreviews()
+            return
+
+        # Hiding previews does not decode any image data.
         for modButton in self.modsButtons:
             modButton.updateListPreview()
             modButton.onParentResize()
+
+    def queueVisibleListPreviews(self):
+        """Decode thumbnails only for cards currently on screen.
+
+        Decoding every user-provided image at once was the startup crash path.
+        This method is deliberately invoked after the screen is visible and
+        again as the user scrolls.
+        """
+        from ..utils.config import LoaderConfig
+        if not LoaderConfig().showListPreviews:
+            return
+
+        viewport = self.ui.scrollModsList.viewport()
+        viewport_rect = viewport.rect()
+        visible_buttons = []
+        for button in self.modsButtons:
+            if not button.isVisible() or getattr(button, "_listPreviewLoaded", False):
+                continue
+            top_left = button.mapTo(viewport, QPoint(0, 0))
+            if QRect(top_left, button.size()).intersects(viewport_rect):
+                visible_buttons.append(button)
+
+        if not visible_buttons:
+            return
+
+        self._preview_load_generation += 1
+        generation = self._preview_load_generation
+        self._pending_preview_buttons = visible_buttons
+        QTimer.singleShot(0, lambda: self._loadVisibleListPreviewBatch(generation))
+
+    def preloadAllListPreviews(self, completed, progress=None):
+        """Preload every current card before the list replaces the loader.
+
+        Cards are rebuilt by applySort(), so this runs only afterwards.  The
+        work is spread across event-loop turns to keep Qt and the loading
+        screen alive while still presenting a complete list at first paint.
+        """
+        from ..utils.config import LoaderConfig
+        ModButton.preloadStatusPixmaps()
+        if not LoaderConfig().showListPreviews:
+            completed()
+            return
+
+        self._preview_preload_generation += 1
+        generation = self._preview_preload_generation
+        self._pending_preload_buttons = list(self.modsButtons)
+        self._preloadListPreviewBatch(generation, completed, progress)
+
+    def preloadAllModMetadata(self, completed, progress=None):
+        """Resolve requirements and searchable tags once on the loading screen."""
+        self._metadata_preload_generation += 1
+        generation = self._metadata_preload_generation
+        self._pending_metadata_mods = list(self.mods.values())
+        total = len(self._pending_metadata_mods)
+
+        def process_batch():
+            if generation != self._metadata_preload_generation:
+                return
+            batch = self._pending_metadata_mods[:4]
+            self._pending_metadata_mods = self._pending_metadata_mods[4:]
+            for mod_class in batch:
+                try:
+                    replacements = self.getModReplacements(mod_class)
+                    mod_class.tags = self._getFastTags(mod_class, replacements)
+                except Exception as exc:
+                    print(f"[Mods] Metadata preload failed for {mod_class.name!r}: {exc}")
+            if progress:
+                progress(total - len(self._pending_metadata_mods), total)
+            if self._pending_metadata_mods:
+                QTimer.singleShot(0, process_batch)
+            else:
+                completed()
+
+        process_batch()
+
+    def cancelDeferredListWork(self):
+        """Invalidate every queued callback before a reload detaches rows."""
+        self._preview_load_generation += 1
+        self._preview_preload_generation += 1
+        self._metadata_preload_generation += 1
+        self._pending_preview_buttons = []
+        self._pending_preload_buttons = []
+        self._pending_metadata_mods = []
+
+    def _preloadListPreviewBatch(self, generation, completed, progress):
+        if generation != self._preview_preload_generation:
+            return
+
+        batch = self._pending_preload_buttons[:8]
+        self._pending_preload_buttons = self._pending_preload_buttons[8:]
+        for button in batch:
+            try:
+                button._updateListPreviewSafe()
+            except RuntimeError:
+                continue
+
+        if progress:
+            done = len(self.modsButtons) - len(self._pending_preload_buttons)
+            progress(done, len(self.modsButtons))
+
+        if self._pending_preload_buttons:
+            QTimer.singleShot(0, lambda: self._preloadListPreviewBatch(generation, completed, progress))
+        else:
+            completed()
+
+    def _loadVisibleListPreviewBatch(self, generation):
+        if generation != self._preview_load_generation:
+            return
+
+        batch = self._pending_preview_buttons[:4]
+        self._pending_preview_buttons = self._pending_preview_buttons[4:]
+        for button in batch:
+            try:
+                button._updateListPreviewSafe()
+                button.onParentResize()
+            except RuntimeError:
+                # A refresh can replace list rows while this deferred batch is
+                # pending; the next visible pass will handle the new rows.
+                continue
+
+        if self._pending_preview_buttons:
+            QTimer.singleShot(20, lambda: self._loadVisibleListPreviewBatch(generation))
 
     def updateListPreviewsIcon(self):
         from ..utils.config import LoaderConfig
@@ -1109,8 +1347,12 @@ class Mods(QWidget):
             self.ui.updateAllMods.setIcon(QIcon(":/icons/resources/icons/Preview.png"))
 
     def onResize(self, *a):
-        width = self.ui.scrollBody.width() - (7 if self.ui.scrollBody.verticalScrollBar().isVisible() else 0)
-        imageHeight = self.ui.scrollBody.width() // self.previewRatio
+        scroll_width = max(1, self.ui.scrollBody.width())
+        width = max(1, scroll_width - (7 if self.ui.scrollBody.verticalScrollBar().isVisible() else 0))
+        preview_ratio = getattr(self, "previewRatio", 16 / 9)
+        if not isinstance(preview_ratio, (int, float)) or preview_ratio <= 0:
+            preview_ratio = 16 / 9
+        imageHeight = max(1, int(scroll_width / preview_ratio))
 
         self.body.modPreview.setGeometry(0, 0, width, imageHeight)
         self.body.modPreviewInfo.setGeometry(0, 0, width, imageHeight)
@@ -1119,6 +1361,15 @@ class Mods(QWidget):
         spacing = self.modDescriptionsAndActionsLayout.spacing()
 
         self.body.modPreviewFrame.setMinimumHeight(imageHeight)
+
+        # ``isVisible()`` is also false while an ancestor is hidden (for
+        # example during the loading screen).  Track the section's own state
+        # so a valid description is not accidentally collapsed before the
+        # details panel is attached to the window.
+        if not getattr(self, "_descriptionVisible", True):
+            self.body.modDescription.setMinimumHeight(0)
+            self.body.modDescription.setMaximumHeight(0)
+            return
 
         modDescriptionHeight = self.ui.modBody.height() - imageHeight - self.body.modTags.height() - \
                                self.body.modActions.height() - tMargin - bMargin - spacing * \
@@ -1130,6 +1381,109 @@ class Mods(QWidget):
             self.body.modDescription.setMinimumHeight(modDescriptionDocumentHeight)
         else:
             self.body.modDescription.setMinimumHeight(modDescriptionHeight)
+
+    def _addWarningToggle(self, frame, layout, text_label):
+        """Attach a small fold button while keeping warning text unchanged."""
+        # Slightly tighter margins make the expanded warning cards less tall;
+        # the text itself remains exactly as authored.
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(8)
+
+        toggle = QPushButton("-", frame)
+        toggle.setFixedSize(22, 22)
+        toggle.setCursor(Qt.PointingHandCursor)
+        toggle.setFocusPolicy(Qt.NoFocus)
+        toggle.setToolTip("Collapse warning")
+        toggle.setStyleSheet("""
+            QPushButton {
+                color: #a1a1aa;
+                background: transparent;
+                border: none;
+                border-radius: 4px;
+                font-size: 15px;
+                font-weight: bold;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                color: #ffffff;
+                background-color: #2b2c30;
+            }
+        """)
+        layout.addWidget(toggle, 0, Qt.AlignTop)
+        frame._warningTextLabel = text_label
+        frame._warningToggle = toggle
+        self._warningSections.append(frame)
+        toggle.clicked.connect(lambda _checked=False, current=frame: self._toggleWarning(current))
+
+    def _addSectionToggle(self, layout, target, collapse_tooltip):
+        """Add the compact +/- control used by requirements and security."""
+        toggle = QPushButton("-")
+        toggle.setFixedSize(22, 22)
+        toggle.setCursor(Qt.PointingHandCursor)
+        toggle.setFocusPolicy(Qt.NoFocus)
+        toggle.setToolTip(collapse_tooltip)
+        toggle.setStyleSheet("""
+            QPushButton {
+                color: #a1a1aa;
+                background: transparent;
+                border: none;
+                border-radius: 4px;
+                font-size: 15px;
+                font-weight: bold;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                color: #ffffff;
+                background-color: #2b2c30;
+            }
+        """)
+        layout.addWidget(toggle, 0, Qt.AlignTop)
+        target._sectionCollapseToggle = toggle
+        toggle.clicked.connect(
+            lambda _checked=False, current=target, control=toggle: self._toggleSection(current, control)
+        )
+        return toggle
+
+    def _toggleSection(self, target, toggle):
+        expanded = target.isVisible()
+        target.setVisible(not expanded)
+        toggle.setText("+" if expanded else "-")
+        toggle.setToolTip("Expand section" if expanded else "Collapse section")
+        target.parentWidget().adjustSize()
+        self.modDescriptionsAndActionsLayout.invalidate()
+        QTimer.singleShot(0, self.onResize)
+
+    @staticmethod
+    def _setSectionExpanded(target, expanded=True):
+        target.setVisible(bool(expanded))
+        toggle = getattr(target, "_sectionCollapseToggle", None)
+        if toggle is not None:
+            toggle.setText("-" if expanded else "+")
+            toggle.setToolTip("Collapse section" if expanded else "Expand section")
+
+    def _toggleWarning(self, frame):
+        text_label = getattr(frame, "_warningTextLabel", None)
+        toggle = getattr(frame, "_warningToggle", None)
+        if text_label is None or toggle is None:
+            return
+
+        expanded = text_label.isVisible()
+        text_label.setVisible(not expanded)
+        toggle.setText("+" if expanded else "-")
+        toggle.setToolTip("Expand warning" if expanded else "Collapse warning")
+        frame.adjustSize()
+        self.modDescriptionsAndActionsLayout.invalidate()
+        QTimer.singleShot(0, self.onResize)
+
+    def _setWarningVisible(self, frame, visible, reset_expanded=False):
+        """Show/hide a warning and optionally restore its default expansion."""
+        text_label = getattr(frame, "_warningTextLabel", None)
+        toggle = getattr(frame, "_warningToggle", None)
+        if visible and reset_expanded and text_label is not None and toggle is not None:
+            text_label.show()
+            toggle.setText("-")
+            toggle.setToolTip("Collapse warning")
+        frame.setVisible(bool(visible))
 
     def onModsListResize(self, event):
         layout = self.modsList.layout()
@@ -1143,6 +1497,16 @@ class Mods(QWidget):
 
         if hasattr(self, 'origScrollModsListResizeEvent') and self.origScrollModsListResizeEvent:
             self.origScrollModsListResizeEvent(event)
+
+    def refreshModButtonLayouts(self):
+        """Apply card geometry after the list receives its real viewport size."""
+        for button in self.modsButtons:
+            try:
+                button.onParentResize()
+                button.refreshStateIcon()
+            except RuntimeError:
+                continue
+        self.ui.scrollModsList.viewport().update()
 
 
     def eventFilter(self, qobject, event):
@@ -1223,13 +1587,104 @@ class Mods(QWidget):
 
         self.loadPreview(self.previews[0])
 
+    @staticmethod
+    def _getBasicSpecialModFlags(modClass: ModClass):
+        """Cheap UI-only classification; never inspect SWF code on a click."""
+        tags = {str(tag).strip().lower() for tag in (modClass.tags or [])}
+        name = (modClass.name or "").lower()
+        is_hand = bool({"hand mod", "hand mods", "hands"} & tags) or "hand mod" in name
+        is_color = bool({"color mod", "color mods", "colors"} & tags) or "color mod" in name
+        return is_hand, is_color, [], []
+
+    @staticmethod
+    def _getBasicSecurityInfo(modClass: ModClass):
+        swfs = modClass.swfs if isinstance(modClass.swfs, dict) else {}
+        return {
+            "has_ui_mainmenu": any("ui_mainmenu" in str(name).lower() for name in swfs),
+            "is_certified": False,
+            "status": "NO_UI",
+            "threats": [],
+        }
+
+    @staticmethod
+    def _getFastTags(modClass: ModClass, replacements=None) -> List[str]:
+        """Classify from Core metadata only; never open a mod while searching."""
+        from ..utils.tags_helper import get_all_legends, normalize_tag
+
+        tags = []
+        seen = set()
+        for tag in getattr(modClass, "tags", []) or []:
+            normalized = normalize_tag(tag)
+            if normalized and normalized.casefold() not in seen:
+                tags.append(normalized)
+                seen.add(normalized.casefold())
+
+        names = [str(name).lower() for name in (
+            (getattr(modClass, "swfNames", []) or []) +
+            (getattr(modClass, "fileNames", []) or []) +
+            (getattr(modClass, "spriteNames", []) or [])
+        )]
+        inferred = []
+        if any(any(token in name for token in ("ui_", "menu", "hud", "avatar")) for name in names):
+            inferred.append("UI")
+        if any(any(token in name for token in ("bones", "sfx")) for name in names):
+            inferred.append("Effects")
+        if any(any(token in name for token in ("map", "background", "stage")) for name in names):
+            inferred.append("Map")
+        is_hand, is_color, _, _ = Mods._getBasicSpecialModFlags(modClass)
+        if is_hand:
+            inferred.append("Hand Mod")
+        if is_color:
+            inferred.append("Color Mod")
+        if getattr(modClass, "bmtCertified", False):
+            inferred.append("BMT Certified")
+
+        replacements = replacements or []
+        is_avatar = any(
+            "(avatar)" in replacement.casefold() or "avatar" in replacement.casefold()
+            for replacement in replacements
+        )
+        has_costume = False
+        has_weapon = False
+        for replacement in replacements:
+            replacement_folded = replacement.casefold()
+            if any(marker in replacement_folded for marker in ("(avatar)", "(color scheme)", "(hand mod)")):
+                continue
+            if "(" in replacement_folded and ")" in replacement_folded:
+                has_weapon = True
+            elif not is_avatar:
+                has_costume = True
+        if is_avatar:
+            inferred.extend(("UI", "Avatars"))
+        if has_costume:
+            inferred.append("Legend Skin")
+        if has_weapon:
+            inferred.append("Weapon Skin")
+
+        searchable_names = names + [str(value).casefold() for value in replacements]
+        if not is_avatar:
+            for legend in get_all_legends():
+                legend_folded = legend.casefold()
+                if any(legend_folded in value for value in searchable_names):
+                    inferred.append(legend)
+
+        for tag in inferred:
+            if tag.casefold() not in seen:
+                tags.append(tag)
+                seen.add(tag.casefold())
+        return tags
+
     def getModReplacements(self, modClass: ModClass) -> List[str]:
         from ..utils.config import LoaderConfig
-        from ..utils.lang_reader import get_global_lang_reader, get_cached_replacements, set_cached_replacements
-        from ..utils.tags_helper import detect_special_mod_types
+        from ..utils.lang_reader import (
+            find_brawlhalla_languages_folder,
+            get_global_lang_reader,
+            get_cached_replacements,
+            set_cached_replacements,
+        )
 
         # Check for Special Mod Types (Hand Mod & Color Mod) replacements
-        is_hand_spec, is_color_spec, hand_targets_spec, color_targets_spec = detect_special_mod_types(modClass)
+        is_hand_spec, is_color_spec, hand_targets_spec, color_targets_spec = self._getBasicSpecialModFlags(modClass)
 
         # Hash-based cache: compute once per mod, reuse on every select click
         cached = get_cached_replacements(modClass.hash)
@@ -1248,15 +1703,11 @@ class Mods(QWidget):
             return replacements
 
         config = LoaderConfig()
-        bh_path = config.brawlhallaPath
-        if not bh_path or not os.path.exists(os.path.join(bh_path, "languages")):
-            possible_path = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Brawlhalla"
-            if os.path.exists(os.path.join(possible_path, "languages")):
-                bh_path = possible_path
-
-        lang_reader = None
-        if bh_path and os.path.exists(os.path.join(bh_path, "languages")):
-            lang_reader = get_global_lang_reader(os.path.join(bh_path, "languages"))
+        languages_folder = find_brawlhalla_languages_folder(config.brawlhallaPath)
+        lang_reader = (
+            get_global_lang_reader(languages_folder, load=False)
+            if languages_folder else None
+        )
 
         # Sprite part_type prefix -> weapon type display name
         # Keys are the exact first segment after stripping "a_" prefix from symbolclass names
@@ -1361,9 +1812,8 @@ class Mods(QWidget):
                 seen.add(item)
                 replacements.append(item)
 
-        # Check for Special Mod Types (Hand Mod & Color Mod) replacements
-        from ..utils.tags_helper import detect_special_mod_types
-        is_hand_spec, is_color_spec, hand_targets_spec, color_targets_spec = detect_special_mod_types(modClass)
+        # Detail-card classification deliberately stays metadata-only.
+        is_hand_spec, is_color_spec, hand_targets_spec, color_targets_spec = self._getBasicSpecialModFlags(modClass)
 
         if is_color_spec and color_targets_spec:
             for ct in color_targets_spec:
@@ -1388,6 +1838,24 @@ class Mods(QWidget):
             self.secDetailsContainer.setVisible(not is_vis)
             self.secDetailsToggleBtn.setText("Hide Details ▲" if not is_vis else "Show Details ▼")
 
+    def _setSecurityBadges(self, badges):
+        """Update persistent security badges without rebuilding Qt widgets."""
+        for index, badge_parts in enumerate(self._securityBadgeLabels):
+            badge_widget, dot_widget, text_widget = badge_parts
+            if index >= len(badges):
+                badge_widget.hide()
+                continue
+
+            label, dot_color, background, border = badges[index]
+            badge_widget.setStyleSheet(
+                f"background-color: {background}; border-radius: 16px; border: 1px solid {border};"
+            )
+            dot_widget.setStyleSheet(
+                f"color: {dot_color}; font-size: 9px; border: none; background: transparent;"
+            )
+            text_widget.setText(label)
+            badge_widget.show()
+
     def updateData(self):
         self.modsActions.webPage.setParent(None)
         self.modsActions.install.setParent(None)
@@ -1402,7 +1870,11 @@ class Mods(QWidget):
             self.body.modName.setStyleSheet("color: #eeeeee;")
             self.body.modSource.setText("Source: ")
             self.body.modVersion.setText("Version: ")
-            self.body.modDescription.setText("")
+            self.body.modDescription.clear()
+            self.body.modDescription.setMinimumHeight(0)
+            self.body.modDescription.setMaximumHeight(0)
+            self._descriptionVisible = False
+            self.body.modDescription.hide()
             self.setPreviewsPaths([self.defaultPreview])
             if hasattr(self, 'warningFrame'):
                 self.warningFrame.hide()
@@ -1414,10 +1886,57 @@ class Mods(QWidget):
                 self.handWarningFrame.hide()
             if hasattr(self, 'colorWarningFrame'):
                 self.colorWarningFrame.hide()
+            if hasattr(self, '_securityBadgeLabels'):
+                self._setSecurityBadges([])
+            if hasattr(self, 'secStatusDescLabel'):
+                self.secStatusDescLabel.setText("")
+            if hasattr(self, 'secDetailsToggleBtn'):
+                self.secDetailsToggleBtn.hide()
+            if hasattr(self, 'secDetailsContainer'):
+                self.secDetailsContainer.hide()
             self.updateTagPills([])
             return
 
         modClass = self.selectedModButton.modClass
+
+        # Paint the basic detail data first.  The optional classification
+        # sections below must never prevent a selected mod from showing its
+        # name, description, or preview.
+        self.body.modName.setText(modClass.name or "Unnamed mod")
+        source_text = modClass.platform if modClass.platform is not None else ""
+        self.body.modSource.setText("Source: " + source_text)
+        self.body.modVersion.setText("Version: " + (modClass.version or ""))
+        self._setWarningVisible(self.warningFrame, True, reset_expanded=True)
+        self._setSectionExpanded(self.securityContentFrame, True)
+        description_html = (modClass.description or "").strip()
+        # ModClass stores descriptions after TextFormatter has wrapped them
+        # in HTML.  An actually empty source therefore still contains an
+        # empty ``<p>`` and cannot be detected with a string check alone.
+        description_document = QTextDocument()
+        description_document.setHtml(description_html)
+        description = description_html if description_document.toPlainText().strip() else ""
+        if description:
+            # Restore the normal QTextBrowser size when moving from a mod
+            # without a description to one that has text.
+            self.body.modDescription.setMaximumHeight(16777215)
+            self.body.modDescription.setMinimumHeight(0)
+            self.body.modDescription.setText(description)
+            self._descriptionVisible = True
+            self.body.modDescription.show()
+        else:
+            # An empty QTextBrowser otherwise keeps the height calculated for
+            # the previous selection.  Removing it from the visible layout
+            # keeps requirements/security directly below the warnings.
+            self.body.modDescription.clear()
+            self.body.modDescription.setMinimumHeight(0)
+            self.body.modDescription.setMaximumHeight(0)
+            self._descriptionVisible = False
+            self.body.modDescription.hide()
+        try:
+            self.setPreviewsPaths(modClass.previewsPaths or [self.defaultPreview])
+        except Exception as exc:
+            print(f"[Mods] Preview setup failed for {modClass.name!r}: {exc}")
+            self.setPreviewsPaths([self.defaultPreview])
 
 
         if modClass.installed:
@@ -1429,9 +1948,8 @@ class Mods(QWidget):
 
         AddToFrame(self.modsActions.mainFrame, self.modsActions.deleteMod)
 
-        # Show Fix button for Color or Hand mods
-        from ..utils.tags_helper import detect_special_mod_types
-        is_hand_spec, is_color_spec, _, _ = detect_special_mod_types(modClass)
+        # Show Fix button for Color or Hand mods.
+        is_hand_spec, is_color_spec, _, _ = self._getBasicSpecialModFlags(modClass)
         if (is_hand_spec or is_color_spec) and modClass.modFileExist:
             AddToFrame(self.modsActions.mainFrame, self.modsActions.fixMod)
 
@@ -1440,30 +1958,27 @@ class Mods(QWidget):
         if is_ex:
             self.body.modName.setStyleSheet("color: #FFA500;")
             if hasattr(self, 'exWarningFrame'):
-                self.exWarningFrame.show()
+                self._setWarningVisible(self.exWarningFrame, True, reset_expanded=True)
         else:
             self.body.modName.setStyleSheet("color: #eeeeee;")
             if hasattr(self, 'exWarningFrame'):
-                self.exWarningFrame.hide()
+                self._setWarningVisible(self.exWarningFrame, False)
 
-        # Hand Mod & Color Mod Warning Toggles
-        from ..utils.tags_helper import detect_special_mod_types, check_ui_mainmenu_security
-        is_hand_mod, is_color_mod, _, _ = detect_special_mod_types(modClass)
-        sec_info = check_ui_mainmenu_security(modClass)
+        # Do not scan arbitrary mod source from a UI click.  The detailed SWF
+        # inspection remains part of install/fix operations in Core.
+        is_hand_mod, is_color_mod, _, _ = self._getBasicSpecialModFlags(modClass)
+        sec_info = self._getBasicSecurityInfo(modClass)
 
         if hasattr(self, 'handWarningFrame'):
-            if is_hand_mod:
-                self.handWarningFrame.show()
-            else:
-                self.handWarningFrame.hide()
+            self._setWarningVisible(self.handWarningFrame, is_hand_mod, reset_expanded=is_hand_mod)
         if hasattr(self, 'colorWarningFrame'):
-            if is_color_mod:
-                self.colorWarningFrame.show()
-            else:
-                self.colorWarningFrame.hide()
+            self._setWarningVisible(self.colorWarningFrame, is_color_mod, reset_expanded=is_color_mod)
 
         # Update Security Audit Section Badges
-        if hasattr(self, 'secBadgesLayout') and hasattr(self, 'secStatusDescLabel'):
+        # Legacy dynamic badge code is retained below for reference but must
+        # not run: it deletes widgets that are owned by the layout while Qt is
+        # processing the selection event.
+        if False and hasattr(self, 'secBadgesLayout') and hasattr(self, 'secStatusDescLabel'):
             while self.secBadgesLayout.count():
                 item = self.secBadgesLayout.takeAt(0)
                 w = item.widget()
@@ -1538,42 +2053,172 @@ class Mods(QWidget):
                     self.secStatusDescLabel.setText("Standard game asset mod. Zero executable code risk.")
                     self.secStatusDescLabel.setStyleSheet("color: #34d399; font-size: 10px; border: none; background: transparent;")
 
-        self.setPreviewsPaths(modClass.previewsPaths)
-        self.body.modName.setText(modClass.name)
-        source_text = modClass.platform if modClass.platform is not None else ""
-        self.body.modSource.setText("Source: " + source_text)
-        self.body.modVersion.setText("Version: " + modClass.version)
+        # Use the persistent widgets created with the details panel.  This
+        # always produces a visible security result without deleting or
+        # reparenting anything during a selection event.
+        has_ui = sec_info.get("has_ui_mainmenu", False)
+        is_bmt = sec_info.get("is_certified", False) or getattr(modClass, "bmtCertified", False)
+        threats = sec_info.get("threats", [])
+        is_suspicious = sec_info.get("status") == "SUSPICIOUS" or bool(threats)
+        if is_suspicious:
+            self._setSecurityBadges([
+                ("Security Warning", "#ef4444", "#2c1215", "#ef4444"),
+            ])
+            self.secStatusDescLabel.setText(
+                f"CRITICAL WARNING: {len(threats)} suspicious executable script(s) or pattern(s) detected."
+            )
+            self.secStatusDescLabel.setStyleSheet(
+                "color: #ef4444; font-size: 10px; font-weight: bold; border: none; background: transparent;"
+            )
+        else:
+            badges = [("Mod Creator Certified", "#c084fc", "#221338", "#a855f7")]
+            if is_bmt:
+                badges.append(("BMT Certified", "#07c9d7", "#0c2429", "#07c9d7"))
+                status, status_color = "Official verified clean mod created with Brawlhalla Modding Toolkit.", "#07c9d7"
+            elif has_ui:
+                badges.append(("Custom UI", "#94a3b8", "#1e293b", "#475569"))
+                status, status_color = "Clean files without BMT certification.", "#94a3b8"
+            else:
+                badges.append(("Verified Safe Assets", "#34d399", "#06281e", "#10b981"))
+                status, status_color = "Standard game asset mod. Zero executable code risk.", "#34d399"
+            self._setSecurityBadges(badges)
+            self.secStatusDescLabel.setText(status)
+            self.secStatusDescLabel.setStyleSheet(
+                f"color: {status_color}; font-size: 10px; border: none; background: transparent;"
+            )
+        self.secDetailsToggleBtn.setVisible(is_suspicious)
+        self.secDetailsContainer.hide()
 
-        desc = modClass.description or ""
-        self.body.modDescription.setText(desc)
-
-        replacements = self.getModReplacements(modClass)
+        try:
+            replacements = self.getModReplacements(modClass)
+        except Exception as exc:
+            # Requirements are supplementary.  A malformed legacy metadata
+            # field must not blank the rest of the selected mod panel.
+            print(f"[Mods] Requirements lookup failed for {modClass.name!r}: {exc}")
+            replacements = []
 
         if replacements:
+            self._setSectionExpanded(self.replacesContentFrame, True)
+            import html
             import urllib.parse
-            replaces_html = "<ul style='margin-top: 2px; margin-bottom: 2px; padding-left: 18px; color: #FFFFFF; font-size: 11px; list-style-type: disc; white-space: nowrap;'>"
-            for item in replacements:
+            if len(replacements) == 1:
+                item = str(replacements[0])
                 clean_name = item.split('(')[0].replace('Replaces:', '').strip()
                 slug = clean_name.replace(' ', '_').replace("'", "%27")
                 wiki_url = f"https://brawlhalla.wiki.gg/wiki/{slug}"
-                replaces_html += f"<li style='margin-bottom: 3px; color: #FFFFFF; white-space: nowrap;'><a href='{wiki_url}' style='color: #FFFFFF; text-decoration: none; white-space: nowrap;'>{item}</a></li>"
-            replaces_html += "</ul>"
-
-            self.replacesListLabel.setHtml(replaces_html)
-            self.replacesListLabel.document().adjustSize()
-            doc_h = int(self.replacesListLabel.document().size().height())
-            self.replacesListLabel.setFixedHeight(doc_h + 12)
+                self.replacesTitleLabel.setText(
+                    "<span style='color:#526eff;'>This Mod Replaces:</span> "
+                    f"<a href='{wiki_url}' style='color:#FFFFFF; font-weight:normal; text-decoration:none;'>"
+                    f"{html.escape(item)}</a>"
+                )
+                self.replacesListLabel.clear()
+                self.replacesListLabel.setFixedHeight(0)
+                self.replacesListLabel.hide()
+            else:
+                self.replacesTitleLabel.setText("This Mod Replaces:")
+                self.replacesListLabel.show()
+                replaces_html = "<ul style='margin-top: 0px; margin-bottom: 0px; padding-left: 18px; color: #FFFFFF; font-size: 11px; list-style-type: disc; white-space: nowrap;'>"
+                for item in replacements:
+                    item = str(item)
+                    clean_name = item.split('(')[0].replace('Replaces:', '').strip()
+                    slug = clean_name.replace(' ', '_').replace("'", "%27")
+                    wiki_url = f"https://brawlhalla.wiki.gg/wiki/{slug}"
+                    replaces_html += f"<li style='margin-bottom: 2px; color: #FFFFFF; white-space: nowrap;'><a href='{wiki_url}' style='color: #FFFFFF; text-decoration: none; white-space: nowrap;'>{html.escape(item)}</a></li>"
+                replaces_html += "</ul>"
+                self.replacesListLabel.setHtml(replaces_html)
+                self.replacesListLabel.document().adjustSize()
+                doc_h = int(self.replacesListLabel.document().size().height())
+                self.replacesListLabel.setFixedHeight(doc_h + 4)
             self.replacesFrame.show()
         else:
+            self.replacesTitleLabel.setText("This Mod Replaces:")
             self.replacesListLabel.setHtml("")
+            self.replacesListLabel.hide()
             self.replacesFrame.hide()
 
-        from ..utils.tags_helper import auto_detect_tags
-        auto_tags = auto_detect_tags(modClass, replacements)
+        auto_tags = self._getFastTags(modClass, replacements)
         modClass.tags = auto_tags
         self.updateTagPills(auto_tags)
+        # Let Qt recompute the details layout after the optional description
+        # was shown/hidden; this also releases any stale height from the old
+        # selection.
+        QTimer.singleShot(0, self.onResize)
+
+    def _initializeTagPills(self):
+        """Create the real oval tag widgets once, during stable UI startup."""
+        self.tagsContainerFrame = QFrame()
+        self.tagsContainerFrame.setStyleSheet("background: transparent; border: none; margin: 4px 0px;")
+        self.tagsContainerLayout = QVBoxLayout(self.tagsContainerFrame)
+        self.tagsContainerLayout.setContentsMargins(0, 0, 0, 0)
+        self.tagsContainerLayout.setSpacing(6)
+        self.modDescriptionsAndActionsLayout.insertWidget(1, self.tagsContainerFrame)
+        self.body.modTags.hide()
+
+        self._persistentTagPills = []
+        self._persistentTagRows = []
+        for _ in range(3):
+            row_frame = QFrame()
+            row_frame.setStyleSheet("background: transparent; border: none;")
+            row_layout = QHBoxLayout(row_frame)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(6)
+            for _ in range(4):
+                pill = TagPillWidget("", "#334155")
+                pill.clicked.connect(self.onTagButtonClicked)
+                pill.hide()
+                row_layout.addWidget(pill)
+                self._persistentTagPills.append(pill)
+            row_layout.addStretch(1)
+            row_frame.hide()
+            self.tagsContainerLayout.addWidget(row_frame)
+            self._persistentTagRows.append(row_frame)
+
+        self._persistentTagsExtra = QLabel()
+        self._persistentTagsExtra.setStyleSheet(
+            "color: #888888; font-size: 11px; font-style: italic; background: transparent; border: none;"
+        )
+        self._persistentTagsExtra.hide()
+        self.tagsContainerLayout.addWidget(self._persistentTagsExtra)
+        self.tagsContainerFrame.hide()
 
     def updateTagPills(self, tags: List[str]):
+        # Widgets were created during __init__; selection only updates paint
+        # data and visibility, preserving both the oval shape and stability.
+        from ..utils.tags_helper import get_category_color, normalize_tag
+        from PySide6.QtGui import QColor, QFont, QFontMetrics
+
+        seen_norm = set()
+        clean_tags = []
+        for tag in tags:
+            normalized = normalize_tag(tag)
+            if normalized.lower() not in seen_norm:
+                clean_tags.append(normalized)
+                seen_norm.add(normalized.lower())
+
+        font_metrics = QFontMetrics(QFont("Segoe UI", 8, QFont.Bold))
+        for index, pill in enumerate(self._persistentTagPills):
+            if index >= len(clean_tags):
+                pill.hide()
+                continue
+            tag = clean_tags[index]
+            pill.tag_name = tag
+            pill.bg_color = QColor(get_category_color(tag))
+            pill.setFixedSize(max(font_metrics.horizontalAdvance(tag) + 16, 36), 18)
+            pill.show()
+            pill.update()
+
+        for row_index, row in enumerate(self._persistentTagRows):
+            row.setVisible(bool(clean_tags[row_index * 4:(row_index + 1) * 4]))
+
+        extra_count = len(clean_tags) - len(self._persistentTagPills)
+        if extra_count > 0:
+            self._persistentTagsExtra.setText(f"and {extra_count} more...")
+            self._persistentTagsExtra.show()
+        else:
+            self._persistentTagsExtra.hide()
+        self.tagsContainerFrame.setVisible(bool(clean_tags))
+        return
+
         from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel
         from ..utils.tags_helper import get_category_color, normalize_tag
 
@@ -1585,6 +2230,61 @@ class Mods(QWidget):
             self.tagsContainerLayout.setSpacing(6)
             self.modDescriptionsAndActionsLayout.insertWidget(1, self.tagsContainerFrame)
             self.body.modTags.hide()
+
+        # Keep tag controls alive between selections for the same reason as
+        # the security badges: deleting paintable Qt widgets in a click event
+        # can leave an incomplete details panel.  Tags remain clickable.
+        if not hasattr(self, '_persistentTagPills'):
+            self._persistentTagPills = []
+            for row_index in range(3):
+                row_frame = QFrame()
+                row_frame.setStyleSheet("background: transparent; border: none;")
+                row_layout = QHBoxLayout(row_frame)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(6)
+                for _ in range(4):
+                    pill = TagPillWidget("", "#334155")
+                    pill.clicked.connect(self.onTagButtonClicked)
+                    pill.hide()
+                    row_layout.addWidget(pill)
+                    self._persistentTagPills.append(pill)
+                row_layout.addStretch(1)
+                self.tagsContainerLayout.addWidget(row_frame)
+            self._persistentTagsExtra = QLabel()
+            self._persistentTagsExtra.setStyleSheet(
+                "color: #888888; font-size: 11px; font-style: italic; background: transparent; border: none;"
+            )
+            self._persistentTagsExtra.hide()
+            self.tagsContainerLayout.addWidget(self._persistentTagsExtra)
+
+        seen_norm = set()
+        clean_tags = []
+        for tag in tags:
+            normalized = normalize_tag(tag)
+            if normalized.lower() not in seen_norm:
+                clean_tags.append(normalized)
+                seen_norm.add(normalized.lower())
+
+        from PySide6.QtGui import QColor, QFont, QFontMetrics
+        font_metrics = QFontMetrics(QFont("Segoe UI", 8, QFont.Bold))
+        for index, pill in enumerate(self._persistentTagPills):
+            if index >= min(len(clean_tags), len(self._persistentTagPills)):
+                pill.hide()
+                continue
+            tag = clean_tags[index]
+            pill.tag_name = tag
+            pill.bg_color = QColor(get_category_color(tag))
+            pill.setFixedSize(max(font_metrics.horizontalAdvance(tag) + 16, 36), 18)
+            pill.show()
+            pill.update()
+
+        extra_count = len(clean_tags) - len(self._persistentTagPills)
+        if extra_count > 0:
+            self._persistentTagsExtra.setText(f"and {extra_count} more...")
+            self._persistentTagsExtra.show()
+        else:
+            self._persistentTagsExtra.hide()
+        return
 
         while self.tagsContainerLayout.count():
             item = self.tagsContainerLayout.takeAt(0)
@@ -1917,11 +2617,12 @@ class Mods(QWidget):
     def addModButton(self, modClass: ModClass):
         modButton = ModButton(modClass=modClass,
                               method=self.selectMod,
-                              favoriteMethod=self.toggleFavoriteMethod)
+                              favoriteMethod=self.toggleFavoriteMethod,
+                              parent=self.modsList)
 
         self.modsButtons.append(modButton)
 
-        if not self.selectedModButton:
+        if not self.selectedModButton and not getattr(self, "_defer_selection", False):
             modButton.select()
 
 
@@ -1944,10 +2645,10 @@ class Mods(QWidget):
                fileNames: List[str] = None,
                spriteNames: List[str] = None,
                modPath: str = "",
-               swfs: dict = None):
-
-        for path in previewsPaths:
-            self.cachePreview(path)
+               swfs: dict = None,
+               bmtCertified: bool = False,
+               bmtCert: dict = None,
+               creatorCertified: bool = False):
 
         mod = ModClass(gameVersion,
                        name,
@@ -1967,32 +2668,59 @@ class Mods(QWidget):
                        fileNames,
                        spriteNames,
                        modPath=modPath,
-                       swfs=swfs)
-
-        from ..utils.tags_helper import auto_detect_tags
-        replacements = self.getModReplacements(mod)
-        mod.tags = auto_detect_tags(mod, replacements)
+                       swfs=swfs,
+                       bmtCertified=bmtCertified,
+                       bmtCert=bmtCert,
+                       creatorCertified=creatorCertified)
 
         self.mods[hash] = mod
         self.addModButton(mod)
-        
+
+    def removeMod(self, mod_hash: str):
+        """Remove one mod from the visible list without rescanning every mod."""
+        mod = self.mods.pop(mod_hash, None)
+        if mod is None:
+            return
+
+        button = next((b for b in self.modsButtons if b.modClass.hash == mod_hash), None)
+        if button is not None:
+            was_selected = button is self.selectedModButton
+            group_id = getattr(button, "groupId", "")
+            group = self.modGroupsWidgets.get(group_id) if group_id else None
+            if group is not None and button in group.mod_buttons:
+                # Remove only this row from its group; rebuilding all groups
+                # would recreate every card and defeat the fast delete path.
+                group.removeModButton(button)
+            button.cleanup()
+            self.modsButtons.remove(button)
+            if was_selected:
+                self.selectedModButton = None
+                if self.modsButtons:
+                    self.modsButtons[0].select()
+
     def removeAllMods(self):
+        self.cancelDeferredListWork()
+
+        retired = []
         for gw in list(self.modGroupsWidgets.values()):
             gw.clearModButtons()
+            gw.hide()
             gw.setParent(None)
-            gw.deleteLater()
+            retired.append(gw)
         self.modGroupsWidgets.clear()
 
         ClearFrame(self.modsList)
 
         self.selectedModButton = None
-        for modButton in self.modsButtons:
-            modButton.cleanup()
+        for modButton in list(self.modsButtons):
+            modButton.hide()
+            modButton.setParent(None)
+            if modButton in ModButton.buttons:
+                ModButton.buttons.remove(modButton)
+            retired.append(modButton)
         self.modsButtons.clear()
-
-        for modClass in self.mods.values():
-            del modClass
         self.mods.clear()
+        self._retiredReloadWidgets.extend(retired)
 
     def showSortMenu(self):
         from PySide6.QtWidgets import QMenu
@@ -2099,10 +2827,20 @@ class Mods(QWidget):
                 if p and p.layout():
                     p.layout().removeWidget(w)
 
-            # Purge existing ModButton widgets
+            # Reuse existing rows. Recreating hundreds of PySide widgets for
+            # every sort/load caused deferred destruction and native crashes.
+            existing_buttons = {}
             for btn in list(self.modsButtons):
                 safe_remove_from_layout(btn)
-                btn.cleanup()
+                btn.hide()
+                previous = existing_buttons.get(btn.modClass.hash)
+                if previous is None:
+                    existing_buttons[btn.modClass.hash] = btn
+                else:
+                    btn.setParent(None)
+                    if btn in ModButton.buttons:
+                        ModButton.buttons.remove(btn)
+                    self._retiredReloadWidgets.append(btn)
             self.modsButtons.clear()
 
             # Purge orphaned ModGroupWidgets no longer in config
@@ -2110,8 +2848,9 @@ class Mods(QWidget):
                 if gid not in valid_group_ids:
                     gw = self.modGroupsWidgets.pop(gid)
                     gw.clearModButtons()
+                    gw.hide()
                     gw.setParent(None)
-                    gw.deleteLater()
+                    self._retiredReloadWidgets.append(gw)
 
             # Ensure all saved groups have a ModGroupWidget instance
             for gid, ginfo in groups_dict.items():
@@ -2127,9 +2866,15 @@ class Mods(QWidget):
             new_mods_buttons = []
 
             def create_button(modClass, group_id="", group_color=""):
-                btn = ModButton(modClass=modClass,
-                                method=self.selectMod,
-                                favoriteMethod=self.toggleFavoriteMethod)
+                btn = existing_buttons.pop(modClass.hash, None)
+                if btn is None:
+                    btn = ModButton(modClass=modClass,
+                                    method=self.selectMod,
+                                    favoriteMethod=self.toggleFavoriteMethod,
+                                    parent=self.modsList)
+                else:
+                    btn.modClass = modClass
+                    btn.updateData()
                 if group_id and group_id in groups_dict:
                     gcolor = group_color or groups_dict[group_id].get("color", "")
                     btn.setGroup(group_id, gcolor)
@@ -2147,24 +2892,37 @@ class Mods(QWidget):
                 btn = create_button(m, group_id=gid, group_color=gcolor)
                 btn.setParent(self.modsList)
                 self.modsList.layout().addWidget(btn)
+                btn.show()
 
             # 2. Ungrouped non-favorite mods (loose mods)
             for m in ungrouped_mods:
                 btn = create_button(m)
                 btn.setParent(self.modsList)
                 self.modsList.layout().addWidget(btn)
+                btn.show()
 
-            # 3. Group widgets (each with its assigned mods, including favorite mods!)
+            # 3. Group widgets. Favorites already have one pinned row above;
+            # never create a second live QWidget for the same mod in its group.
             for gid, gw in sorted(self.modGroupsWidgets.items(), key=lambda t: t[1].group_name.lower()):
                 safe_remove_from_layout(gw)
                 gw.setParent(self.modsList)
                 self.modsList.layout().addWidget(gw)
                 gw.show()
 
-                group_mods = [m for m in mod_list if assignments.get(m.hash, "") == gid]
+                group_mods = [
+                    m for m in mod_list
+                    if assignments.get(m.hash, "") == gid and not m.favorite
+                ]
                 for m in group_mods:
                     btn = create_button(m, group_id=gid, group_color=gw.group_color)
                     gw.addModButton(btn)
+                    btn.show()
+
+            for unused in existing_buttons.values():
+                unused.setParent(None)
+                if unused in ModButton.buttons:
+                    ModButton.buttons.remove(unused)
+                self._retiredReloadWidgets.append(unused)
 
             self.modsButtons = new_mods_buttons
 

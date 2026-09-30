@@ -8,6 +8,20 @@ import re
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
 
+
+def _get_mod_cache_file(mod_hash: str) -> Optional[str]:
+    """Return the loader cache path used by the core (Roaming AppData)."""
+    if not mod_hash:
+        return None
+    for env_name in ("APPDATA", "LOCALAPPDATA"):
+        base = os.getenv(env_name, "")
+        if not base:
+            continue
+        cache_file = os.path.join(base, "BModloader", "Mods", mod_hash, "mod.json")
+        if os.path.exists(cache_file):
+            return cache_file
+    return None
+
 # Rich, vibrant, diverse 32-color dark-mode palette
 CATEGORY_PALETTE = [
     "#1b2a4a", # Deep Royal Blue
@@ -259,11 +273,8 @@ def detect_special_mod_types(mod_class: Any) -> Tuple[bool, bool, List[str], Lis
     # Fallback to reading cached mod.json if swfs is empty
     if not swfs and hasattr(mod_class, 'hash') and mod_class.hash:
         try:
-            import json
-            import os
-            local_appdata = os.getenv("LOCALAPPDATA", "")
-            cache_file = os.path.join(local_appdata, "BModloader", "Cache", mod_class.hash, "mod.json")
-            if os.path.exists(cache_file):
+            cache_file = _get_mod_cache_file(mod_class.hash)
+            if cache_file:
                 with open(cache_file, "r", encoding="utf-8") as cf:
                     cached_data = json.load(cf)
                     swfs = cached_data.get("swfs", {}) or {}
@@ -412,9 +423,8 @@ def check_ui_mainmenu_security(mod_class: Any) -> Dict[str, Any]:
     cert_data = getattr(mod_class, 'bmtCert', None) or getattr(mod_class, 'bmt_cert', None)
     if not cert_data and hasattr(mod_class, 'hash') and mod_class.hash:
         try:
-            local_appdata = os.getenv("LOCALAPPDATA", "")
-            cache_file = os.path.join(local_appdata, "BModloader", "Cache", mod_class.hash, "mod.json")
-            if os.path.exists(cache_file):
+            cache_file = _get_mod_cache_file(mod_class.hash)
+            if cache_file:
                 with open(cache_file, "r", encoding="utf-8") as cf:
                     cdata = json.load(cf)
                     cert_data = cdata.get("bmtCert") or cdata.get("bmt_cert")
@@ -423,7 +433,12 @@ def check_ui_mainmenu_security(mod_class: Any) -> Dict[str, Any]:
         except Exception:
             pass
 
-    if not cert_data and hasattr(mod_class, 'modPath') and mod_class.modPath and os.path.exists(mod_class.modPath):
+    # When the core supplied a SWF inventory it also supplied every certificate
+    # field known to that cache.  Reopening the complete .bmod through FFDec here
+    # would block Qt merely to rediscover that an old mod has no certificate.
+    has_core_metadata = bool(swfs) or bool(files) or bool(file_names)
+    if (not cert_data and not has_core_metadata and
+            hasattr(mod_class, 'modPath') and mod_class.modPath and os.path.exists(mod_class.modPath)):
         try:
             from core.swf.swf import Swf
             s = Swf(mod_class.modPath, autoload=False)

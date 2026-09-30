@@ -7,6 +7,7 @@ Reads Brawlhalla language.X.bin files to extract skin names and translations
 import struct
 import os
 import zlib
+import re
 from typing import Dict, List, Optional
 
 class BrawlhallaLangReader:
@@ -297,10 +298,51 @@ def format_avatar_name(raw_name: str, lang_reader=None) -> str:
 GLOBAL_LANG_READER_INSTANCE = None
 MOD_REPLACEMENTS_CACHE: Dict[str, List[str]] = {}
 
-def get_global_lang_reader(languages_folder: str) -> Optional[BrawlhallaLangReader]:
+
+def find_brawlhalla_languages_folder(configured_brawlhalla_path: str = "") -> Optional[str]:
+    """Locate Brawlhalla's languages directory without guessing requirements."""
+    candidates = []
+    if configured_brawlhalla_path:
+        candidates.append(configured_brawlhalla_path)
+    configured_from_env = os.environ.get("BMODS_BRAWLHALLA_PATH", "")
+    if configured_from_env:
+        candidates.append(configured_from_env)
+
+    steam_roots = [
+        r"C:\Program Files (x86)\Steam",
+        r"C:\Program Files\Steam",
+    ]
+    for steam_root in steam_roots:
+        candidates.append(os.path.join(steam_root, "steamapps", "common", "Brawlhalla"))
+        library_file = os.path.join(steam_root, "steamapps", "libraryfolders.vdf")
+        try:
+            with open(library_file, "r", encoding="utf-8", errors="ignore") as stream:
+                content = stream.read()
+            for library_path in re.findall(r'"path"\s+"([^"]+)"', content):
+                library_path = library_path.replace("\\\\", "\\")
+                candidates.append(os.path.join(library_path, "steamapps", "common", "Brawlhalla"))
+        except OSError:
+            continue
+
+    seen = set()
+    for game_path in candidates:
+        normalized = os.path.normcase(os.path.normpath(game_path))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        languages_folder = os.path.join(game_path, "languages")
+        if os.path.isdir(languages_folder):
+            return languages_folder
+    return None
+
+def get_global_lang_reader(languages_folder: str, load: bool = True) -> Optional[BrawlhallaLangReader]:
     global GLOBAL_LANG_READER_INSTANCE
     if GLOBAL_LANG_READER_INSTANCE is not None:
         return GLOBAL_LANG_READER_INSTANCE
+    # Selection only obtains an already prepared reader.  The archive is
+    # loaded during the Loader's startup screen, never from a card click.
+    if not load:
+        return None
     if os.path.exists(languages_folder):
         try:
             reader = BrawlhallaLangReader(languages_folder)

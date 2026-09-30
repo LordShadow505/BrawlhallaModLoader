@@ -1,9 +1,9 @@
 import os
 import re
 
-from PySide6.QtWidgets import QWidget, QScrollArea, QPushButton, QHBoxLayout, QFrame, QLabel, QCheckBox
+from PySide6.QtWidgets import QWidget, QScrollArea, QPushButton, QHBoxLayout, QFrame, QLabel, QCheckBox, QSizePolicy
 from PySide6.QtGui import QFontMetrics, Qt, QPixmap, QIcon, QCursor
-from PySide6.QtCore import QEvent, QSize
+from PySide6.QtCore import QSize
 
 from .modclass import ModClass
 
@@ -12,8 +12,19 @@ from ..ui_sources.ui_mod_button import Ui_ModButton
 
 class ModButton(QWidget):
     buttons = []
+    _statusPixmapCache = {}
 
-    def __init__(self, modClass: ModClass, method, favoriteMethod):
+    @classmethod
+    def preloadStatusPixmaps(cls):
+        for path in (
+            ":/icons/resources/icons/Installed.png",
+            ":/icons/resources/icons/GhostInstalled.png",
+            ":/icons/resources/icons/NotInstalled.png",
+        ):
+            if path not in cls._statusPixmapCache:
+                cls._statusPixmapCache[path] = QPixmap(path)
+
+    def __init__(self, modClass: ModClass, method, favoriteMethod, parent=None):
         self.pressed = False
         self.modClass = modClass
         self.method = method
@@ -21,10 +32,26 @@ class ModButton(QWidget):
         self.groupId = ""
         self.groupColor = ""
 
-        super().__init__()
+        # Give rows a stable owner before Ui_ModButton creates any child
+        # widgets.  A parentless row briefly becomes a top-level Qt "Form"
+        # during rapid list updates and can appear as dozens of windows.
+        super().__init__(parent)
 
         self.ui = Ui_ModButton()
         self.ui.setupUi(self)
+        # Reserve the rightmost 20px for the installed-state icon.  The text
+        # area is the only part that may shrink when list previews are shown.
+        self.ui.modInfo.setMinimumWidth(0)
+        self.ui.modInfo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.ui.frame_2.setMinimumWidth(0)
+        self.ui.frame_2.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.ui.modName.setMinimumWidth(0)
+        self.ui.modName.setMaximumWidth(360)
+        self.ui.modName.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.ui.modStateFrame.setFixedWidth(20)
+        self.ui.modStateFrame.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        self.ui.horizontalLayout_2.setStretchFactor(self.ui.modInfo, 1)
+        self.ui.horizontalLayout_2.setStretchFactor(self.ui.modStateFrame, 0)
 
         # Vertical group color strip (far left)
         self.groupStrip = QFrame()
@@ -96,11 +123,28 @@ class ModButton(QWidget):
         self.ui.horizontalLayout_2.setContentsMargins(4, 0, 10, 0)
 
         self.updateData()
-        self.updateListPreview()
+        # Do not decode every user-supplied preview while constructing a large
+        # library.  Those callbacks run immediately after the final list batch
+        # and one broken image can terminate Qt without a Python traceback.
+        # The list keeps its lightweight placeholder; previews are decoded only
+        # when the user explicitly enables/refreshes list previews.
 
-        self.ui.background.installEventFilter(self)
+        # Keep the row background mouse-enabled.  Making a parent frame
+        # transparent also makes its child buttons unreachable during normal
+        # hit-testing, which disabled both the favorite star and selection
+        # checkbox.  QFrame ignores unhandled clicks, so blank-row clicks can
+        # still propagate to ModButton while real controls receive theirs.
+        self.ui.background.setAttribute(Qt.WA_TransparentForMouseEvents, False)
 
         self.buttons.append(self)
+
+    def _updateListPreviewSafe(self):
+        try:
+            self.updateListPreview()
+            self._listPreviewLoaded = True
+        except RuntimeError:
+            # The row may have been removed before its deferred callback ran.
+            pass
 
     def isChecked(self) -> bool:
         return self.checkBox.isChecked()
@@ -152,11 +196,13 @@ class ModButton(QWidget):
         self.ui.gameVersion.setStyleSheet(f"color: {gameVersionColor}")
 
         if self.modClass.installed and self.modClass.modFileExist:
-            self.ui.modState.setPixmap(QPixmap(u":/icons/resources/icons/Installed.png"))
+            state_icon = ":/icons/resources/icons/Installed.png"
         elif self.modClass.installed:
-            self.ui.modState.setPixmap(QPixmap(u":/icons/resources/icons/GhostInstalled.png"))
+            state_icon = ":/icons/resources/icons/GhostInstalled.png"
         else:
-            self.ui.modState.setPixmap(QPixmap(u":/icons/resources/icons/NotInstalled.png"))
+            state_icon = ":/icons/resources/icons/NotInstalled.png"
+        self.preloadStatusPixmaps()
+        self.ui.modState.setPixmap(self._statusPixmapCache[state_icon])
 
         # Update favorite icon
         if self.modClass.favorite:
@@ -179,11 +225,24 @@ class ModButton(QWidget):
         else:
             self.setToolTip(f"<b>{self.modClass.name}</b><br/>Author: {self.modClass.author}")
 
+    def refreshStateIcon(self):
+        if self.modClass.installed and self.modClass.modFileExist:
+            state_icon = ":/icons/resources/icons/Installed.png"
+        elif self.modClass.installed:
+            state_icon = ":/icons/resources/icons/GhostInstalled.png"
+        else:
+            state_icon = ":/icons/resources/icons/NotInstalled.png"
+        self.preloadStatusPixmaps()
+        self.ui.modState.setPixmap(self._statusPixmapCache[state_icon])
+
     def toggleFavorite(self):
         self.modClass.favorite = not self.modClass.favorite
         self.updateData()
         if self.favoriteMethod:
-            self.favoriteMethod(self.modClass.hash)
+            # Pass the intended state.  Toggling independently in the main
+            # window can undo this click when an old config and a card are
+            # temporarily out of sync.
+            self.favoriteMethod(self.modClass.hash, self.modClass.favorite)
 
     # Global cache for thumbnails to prevent UI freezing
     _thumbCache = {}
@@ -231,10 +290,12 @@ class ModButton(QWidget):
             if parent is None:
                 return False
 
+        self.ui.modStateFrame.show()
+        self.ui.modState.show()
         versionWidth = self.ui.gameVersion.fontMetrics().boundingRect(self.ui.gameVersion.text()).width()
 
         # Calculate current offset caused by margins, star, spacing, and status icon
-        base_offset = 88 
+        base_offset = 112
         
         preview_offset = 0
         if hasattr(self, 'previewContainer') and not self.previewContainer.isHidden():
@@ -299,17 +360,12 @@ class ModButton(QWidget):
         frame.layout().addWidget(self)
         self.show()
 
-    def eventFilter(self, qobject: QWidget, event):
-        if event.type() == QEvent.MouseButtonPress:
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
             self.select()
-
-        return False
-
-    def eventFilter(self, qobject: QWidget, event):
-        if event.type() == QEvent.MouseButtonPress:
-            self.select()
-
-        return False
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def cleanup(self):
         if self in self.buttons:

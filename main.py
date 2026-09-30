@@ -1,6 +1,8 @@
 import os
 import sys
 
+_DLL_DIRECTORY_HANDLES = []
+
 # Detect frozen/compiled binary: supports both PyInstaller (sys.frozen) and Nuitka (__compiled__)
 _is_nuitka = False
 try:
@@ -13,17 +15,21 @@ if getattr(sys, 'frozen', False) or _is_nuitka:
         _base_dir = sys._MEIPASS  # PyInstaller
     else:
         _base_dir = os.path.dirname(os.path.abspath(__file__))  # Nuitka
-    os.environ['PATH'] = _base_dir + os.pathsep + os.path.join(_base_dir, 'PySide6') + os.pathsep + os.path.join(_base_dir, 'shiboken6') + os.pathsep + os.environ.get('PATH', '')
+    _runtime_dll_dirs = [
+        _base_dir,
+        os.path.join(_base_dir, '_jpype'),
+        os.path.join(_base_dir, 'PySide6'),
+        os.path.join(_base_dir, 'shiboken6'),
+    ]
+    os.environ['PATH'] = os.pathsep.join(
+        [path for path in _runtime_dll_dirs if os.path.isdir(path)]
+        + [os.environ.get('PATH', '')]
+    )
     if hasattr(os, 'add_dll_directory'):
-        try:
-            os.add_dll_directory(_base_dir)
-        except Exception:
-            pass
-        for _sub in ['PySide6', 'shiboken6']:
-            _sub_dir = os.path.join(_base_dir, _sub)
-            if os.path.isdir(_sub_dir):
+        for _dll_dir in _runtime_dll_dirs:
+            if os.path.isdir(_dll_dir):
                 try:
-                    os.add_dll_directory(_sub_dir)
+                    _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(_dll_dir))
                 except Exception:
                     pass
     # SetDllDirectoryW would replace the normal DLL search path and can hide
@@ -39,6 +45,13 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = NullWriter()
 
+try:
+    import faulthandler
+    faulthandler.enable(all_threads=True)
+except Exception:
+    # Diagnostic support must never prevent the loader from opening.
+    pass
+
 
 import ssl
 try:
@@ -47,6 +60,7 @@ except AttributeError:
     pass
 
 import time
+import inspect
 import py7zr
 import urllib
 import rarfile
@@ -57,6 +71,14 @@ import webbrowser
 import subprocess
 import requests
 import multiprocessing
+
+
+def global_thread_excepthook(args):
+    global_excepthook(args.exc_type, args.exc_value, args.exc_traceback)
+
+
+if hasattr(threading, "excepthook"):
+    threading.excepthook = global_thread_excepthook
 
 import urllib3
 try:
@@ -90,7 +112,10 @@ class FlowTracer:
             caller_file = os.path.basename(caller_frame.filename)
             caller_line = caller_frame.lineno
         except Exception:
-            pass
+            caller_name = "unknown"
+            caller_file = "unknown"
+            caller_line = 0
+        print(f"[Flow] {caller_file}:{caller_line} {caller_name} -> {func_name}: {details}", flush=True)
 
 
     @classmethod
@@ -130,7 +155,8 @@ except Exception as e:
     traceback.print_exc()
 from PySide6.QtCore import QSize, QTranslator, QLocale, QTimer, Signal, Qt
 from PySide6.QtGui import QIcon, QFontDatabase, QFont, QClipboard, QPixmap, QPainter, QColor
-from PySide6.QtWidgets import QMainWindow, QApplication, QFrame, QVBoxLayout, QLabel, QSplashScreen
+from PySide6.QtWidgets import (QMainWindow, QApplication, QFrame, QVBoxLayout,
+                               QLabel, QSplashScreen, QStackedWidget)
 
 from ui.ui_handler.window import Window
 from ui.ui_handler.header import HeaderFrame
@@ -146,6 +172,7 @@ from ui.utils.textformater import TextFormatter
 from ui.utils.markdown_helper import render_markdown_to_html
 from ui.utils.mainthread import QExecMainThread
 from ui.utils.config import LoaderConfig
+from ui.utils.lang_reader import find_brawlhalla_languages_folder, get_global_lang_reader
 
 from ui.ui_handler.settings import SettingsFrame
 from ui.ui_handler.gamebanana import GameBananaFrame
@@ -340,6 +367,7 @@ class ModLoader(QMainWindow):
     queueUrlSignal = Signal(str)
     queueFileSignal = Signal(str)
     brawlhallaNotFoundSignal = Signal()
+    loadingStepSignal = Signal(int, str, object)
     importQueue = ImportQueue()
 
     _local_base = (
@@ -380,6 +408,7 @@ class ModLoader(QMainWindow):
         self.setWindowIcon(QIcon(':/icons/resources/icons/App.ico'))
 
         self.loading = Loading()
+        self.loadingStepSignal.connect(self.loading.setStep)
         self.header = HeaderFrame(githubMethod=lambda: webbrowser.open(f"{GITHUB}/{REPO}"),
                                   supportMethod=lambda: webbrowser.open(SUPPORT_URL),
                                   infoMethod=self.showInformation)
@@ -423,10 +452,11 @@ class ModLoader(QMainWindow):
             self.loading.setStep(1, "success")
             self.loading.setStep(2, "success")
 
-        bhPath = "Not found"
+        # The UI must not import core.worker.brawlhalla here: that imports
+        # FFDec and starts a second JVM in the UI process.  The worker process
+        # performs automatic discovery itself.
+        bhPath = self.config.brawlhallaPath or "Auto-detected by Core"
         cacheSize = "0 B"
-        if core and hasattr(core, 'worker') and hasattr(core.worker, 'brawlhalla'):
-            bhPath = core.worker.brawlhalla.BRAWLHALLA_PATH or "Not found"
         if core and hasattr(core, 'MODLOADER_CACHE_PATH'):
             cacheSize = format_size(get_dir_size(core.MODLOADER_CACHE_PATH))
 
@@ -439,11 +469,41 @@ class ModLoader(QMainWindow):
             cacheSize=cacheSize
         )
         self.bulkOperationCount = 0
+        # Installation/conflict operations are serialized at the UI boundary.
+        # Sending several InstallMod commands at once makes the worker queue
+        # emit overlapping progress/conflict notifications and can leave many
+        # transient Qt forms behind after a fast click or key sequence.
+        self._conflict_request_hash = None
+        self._conflict_dialog = None
+        self._conflict_decision_hash = None
+        self._install_sequence = []
+        self._install_sequence_index = 0
+        self._active_install_hash = None
         self.currentSortField = getattr(self.config, 'sortField', 'Date') or 'Date'
         self.currentSortReverse = getattr(self.config, 'sortReverse', True) if getattr(self.config, 'sortReverse', None) is not None else True
         self.reloadPending = False
+        self._mods_load_generation = 0
+        self._pending_mod_data = []
+        self._pending_mod_index = 0
+        self._language_preload_started = False
+        self._language_preload_finished = False
+        self._mod_data_waiting_for_language = None
+
+        # Keep each top-level screen parented exactly once.  The old approach
+        # repeatedly detached/reparented the heavy Mods widget through
+        # ClearFrame/AddToFrame.  On PySide6 this could race Python's garbage
+        # collector while Qt was polishing 302 rows, producing a native access
+        # violation in QWidget.show().
+        self.screenStack = QStackedWidget(self.ui.mainFrame)
+        self.ui.mainFrame.layout().addWidget(self.header)
+        self.ui.mainFrame.layout().addWidget(self.screenStack, 1)
+        for screen in (self.loading, self.mods, self.gamebanana, self.settings):
+            self.screenStack.addWidget(screen)
 
         self.setLoadingScreen()
+        # Requirement names must come from Brawlhalla's language archive.  Do
+        # this before the mod list can be displayed, never from a card click.
+        QTimer.singleShot(0, self._preload_language_data)
 
         self.resize(QSize(926, 550))
         self.setMinimumSize(QSize(926, 550))
@@ -493,27 +553,25 @@ class ModLoader(QMainWindow):
 
     def runController(self):
         InitWindowSetText("Initializing ModLoader Core...")
-        self.loading.setStep(3, "active")
+        self.loadingStepSignal.emit(3, "active", None)
+
+        # Set this before spawning the controller process so it inherits the
+        # value while discovering Brawlhalla.
+        if self.config.brawlhallaPath:
+            os.environ["BMODS_BRAWLHALLA_PATH"] = self.config.brawlhallaPath
 
         self.controller = core.Controller()
         self.controller.setModsPath(self.modsPath)
-        self.loading.setStep(3, "success")
+        self.loadingStepSignal.emit(3, "success", None)
         
-        # Sync custom brawlhalla path to core
-        if self.config.brawlhallaPath:
-            core.worker.config.ModloaderCoreConfig.customBrawlhallaPath = self.config.brawlhallaPath
-            core.worker.config.ModloaderCoreConfig.save()
-            if hasattr(core, 'worker') and hasattr(core.worker, 'brawlhalla'):
-                core.worker.brawlhalla.BRAWLHALLA_PATH = self.config.brawlhallaPath
-            
         InitWindowSetText("Scanning installed and source mods...")
         if self.controller and hasattr(self.controller, 'reloadMods'):
             self.controller.reloadMods()
         self.controller.getModsData()
 
         # Check if Brawlhalla path was found
-        bh_path = getattr(core.worker.brawlhalla, 'BRAWLHALLA_PATH', None) if (hasattr(core, 'worker') and hasattr(core.worker, 'brawlhalla')) else None
-        if not bh_path or not os.path.exists(bh_path) or not os.path.isfile(os.path.join(bh_path, "Brawlhalla.exe")):
+        bh_path = self.config.brawlhallaPath
+        if bh_path and (not os.path.exists(bh_path) or not os.path.isfile(os.path.join(bh_path, "Brawlhalla.exe"))):
             QTimer.singleShot(500, self.brawlhallaNotFoundSignal.emit)
 
     def controllerHandler(self):
@@ -530,7 +588,166 @@ class ModLoader(QMainWindow):
                 self._processControllerData(data)
                 processed += 1
             except Exception:
-                break
+                error_details = traceback.format_exc()
+                print("[Controller] Failed while handling a Core message:\n" + error_details,
+                      file=sys.stderr, flush=True)
+                try:
+                    self.showError("Loader message error:", error_details)
+                except Exception:
+                    print("[Controller] The error dialog could not be shown:\n" + traceback.format_exc(),
+                          file=sys.stderr, flush=True)
+                processed += 1
+
+    def _preload_language_data(self):
+        """Load verified Brawlhalla names while the startup screen is visible."""
+        if self._language_preload_started:
+            return
+        self._language_preload_started = True
+        if hasattr(self, 'loading'):
+            self.loading.setStep(4, "pending", "Loading Brawlhalla language data...")
+
+        languages_folder = find_brawlhalla_languages_folder(self.config.brawlhallaPath)
+        if not languages_folder:
+            print("[Languages] Brawlhalla language folder was not found; requirements will stay hidden.", flush=True)
+            if hasattr(self, 'loading'):
+                self.loading.setStep(4, "pending", "Brawlhalla language data not found")
+        else:
+            reader = get_global_lang_reader(languages_folder, load=True)
+            if reader is None:
+                print(f"[Languages] Failed to load language data from '{languages_folder}'.", flush=True)
+                if hasattr(self, 'loading'):
+                    self.loading.setStep(4, "pending", "Could not load Brawlhalla language data")
+            else:
+                print(
+                    f"[Languages] Loaded {len(reader.costume_map)} costumes, "
+                    f"{len(reader.weapon_map)} weapons and {len(reader.avatar_map)} avatars.",
+                    flush=True,
+                )
+                if hasattr(self, 'loading'):
+                    self.loading.setStep(4, "pending", "Brawlhalla language data loaded")
+
+        self._language_preload_finished = True
+        if self._mod_data_waiting_for_language is not None:
+            mod_data = self._mod_data_waiting_for_language
+            self._mod_data_waiting_for_language = None
+            self._begin_mod_data_load(mod_data)
+
+    def _start_mod_data_load(self, mod_data):
+        """Wait for verified names, then populate the list in UI batches."""
+        if not self._language_preload_finished:
+            self._mod_data_waiting_for_language = list(mod_data or [])
+            if not self._language_preload_started:
+                QTimer.singleShot(0, self._preload_language_data)
+            return
+        self._begin_mod_data_load(mod_data)
+
+    def _begin_mod_data_load(self, mod_data):
+        """Populate the list in small UI batches so the window stays responsive."""
+        self._mods_load_generation += 1
+        generation = self._mods_load_generation
+        self._pending_mod_data = list(mod_data or [])
+        self._pending_mod_index = 0
+        self.mods._defer_selection = True
+        if hasattr(self, 'loading'):
+            total = len(self._pending_mod_data)
+            self.loading.setStep(4, "pending", f"Preparing mod list: 0/{total}")
+        self._load_mod_data_batch(generation)
+
+    def _load_mod_data_batch(self, generation):
+        if generation != self._mods_load_generation:
+            return
+
+        batch_end = min(self._pending_mod_index + 32, len(self._pending_mod_data))
+        for modData in self._pending_mod_data[self._pending_mod_index:batch_end]:
+            self.mods.addMod(gameVersion=modData.get("gameVersion", ""),
+                             name=modData.get("name", ""),
+                             author=modData.get("author", ""),
+                             version=modData.get("version", ""),
+                             description=modData.get("description", ""),
+                             tags=modData.get("tags", []),
+                             previewsPaths=modData.get("previewsPaths", []),
+                             hash=modData.get("hash", ""),
+                             platform=modData.get("platform", ""),
+                             installed=modData.get("installed", False),
+                             currentVersion=modData.get("currentVersion", False),
+                             modFileExist=modData.get("modFileExist", False),
+                             date=modData.get("date", 0.0),
+                             favorite=modData.get("hash", "") in self.config.favorites,
+                             swfNames=modData.get("swfNames", []),
+                             fileNames=modData.get("fileNames", []),
+                             spriteNames=modData.get("spriteNames", []),
+                             modPath=modData.get("modPath", ""),
+                             swfs=modData.get("swfs", {}),
+                             bmtCertified=modData.get("bmtCertified", False),
+                             bmtCert=modData.get("bmtCert", {}),
+                             creatorCertified=modData.get("creatorCertified", False))
+
+        self._pending_mod_index = batch_end
+        if hasattr(self, 'loading') and self._pending_mod_data:
+            total = len(self._pending_mod_data)
+            self.loading.setStep(
+                4, "pending",
+                f"Preparing mod list: {self._pending_mod_index}/{total}"
+            )
+        if self._pending_mod_index < len(self._pending_mod_data):
+            QTimer.singleShot(0, lambda: self._load_mod_data_batch(generation))
+            return
+
+        self._pending_mod_data = []
+        self.mods._defer_selection = False
+        installed_count = sum(1 for mod in self.mods.mods.values() if mod.installed)
+        print(f"[Mods] Loaded {len(self.mods.mods)} cards; installed={installed_count}", flush=True)
+
+        FlowTracer.log("applySort_start", "At end of GetModsData")
+        self.mods.applySort(self.currentSortField, self.currentSortReverse)
+        FlowTracer.log("applySort_end", "Finished applySort in GetModsData")
+        if hasattr(self, 'loading'):
+            self.loading.setStep(4, "pending", "Preparing mod requirements and tags...")
+        self.mods.preloadAllModMetadata(
+            lambda: self._start_mod_preview_preload(generation),
+            lambda done, total: self.loading.setStep(
+                4, "pending", f"Preparing mod requirements and tags: {done}/{total}"
+            ) if hasattr(self, 'loading') else None,
+        )
+
+    def _start_mod_preview_preload(self, generation):
+        if generation != self._mods_load_generation:
+            return
+        if hasattr(self, 'loading'):
+            self.loading.setStep(4, "pending", "Preparing card previews...")
+        self.mods.preloadAllListPreviews(
+            lambda: self._finish_mod_list_load(generation),
+            lambda done, total: self.loading.setStep(
+                4, "pending", f"Preparing card previews: {done}/{total}"
+            ) if hasattr(self, 'loading') else None,
+        )
+
+    def _finish_mod_list_load(self, generation):
+        if generation != self._mods_load_generation:
+            return
+
+        if hasattr(self, 'loading'):
+            FlowTracer.log("loading_status_start", "Marking the mod-list step as complete")
+            self.loading.setStep(4, "success", "Mods loaded")
+            self.loading.setStep(5, "success")
+            FlowTracer.log("loading_status_end", "Mod-list status updated")
+        FlowTracer.log("setModsScreen_start", "Attaching completed mod list to the main window")
+        self.setModsScreen()
+        FlowTracer.log("setModsScreen_end", "Completed mod screen attachment")
+        # Refresh once after the list is visible; avoid re-entering the Qt
+        # layout several times while the stacked widget is being attached.
+        QTimer.singleShot(0, self.mods.refreshModButtonLayouts)
+        QTimer.singleShot(50, self.mods.refreshModButtonLayouts)
+        # Do not automatically select a mod here.  Selecting a card performs
+        # a full detail/security/preview load; doing that while 302 cards are
+        # still receiving deferred Qt work made a malformed legacy asset able
+        # to take down the application after the list itself had loaded.
+        # The user can select any card once the list is visible.
+        if self.mods.modsButtons and self.mods.selectedModButton is None:
+            FlowTracer.log("initial_selection_skipped", "Waiting for an explicit card selection")
+        FlowTracer.log("showErrorNotifications_start", "Showing deferred loader errors, if any")
+        self.showErrorNotifications()
+        FlowTracer.log("showErrorNotifications_end", "Mod-list load session complete")
 
     def _processControllerData(self, data):
         cmd = data[0]
@@ -544,7 +761,12 @@ class ModLoader(QMainWindow):
                 m_label = os.path.splitext(os.path.basename(modPath))[0] if modPath else "mod"
                 self.loading.setMod(modPath)
                 InitWindowSetText(f"Loading mod: {m_label}...")
-                InitWindowSetText(f"Loading mod: {m_label}...")
+
+            elif ntype == NotificationType.LoadingModError:
+                mod_path, error_summary, error_details = notification.args
+                print(f"[Loader] Skipped mod '{mod_path or '<cached entry>'}': {error_summary}\n"
+                      f"{error_details}", file=sys.stderr, flush=True)
+                self.errors.append(notification)
 
             elif ntype == NotificationType.ModElementsCount:
                 modHash, count = notification.args
@@ -557,10 +779,25 @@ class ModLoader(QMainWindow):
                 self.progressDialog.addValue()
             elif ntype == NotificationType.ModConflictNotFound:
                 modHash, = notification.args
+                if self._active_install_hash or self._install_sequence or self._conflict_decision_hash == modHash:
+                    return
+                if self._conflict_request_hash not in (None, modHash):
+                    return
+                self._conflict_request_hash = None
                 self.progressDialog.setValue(0)
-                self.controller.installMod(modHash)
+                self._startInstallSequence([modHash])
             elif ntype == NotificationType.ModConflict:
                 modHash, modConflictHashes = notification.args
+                if self._active_install_hash or self._install_sequence:
+                    return
+                if self._conflict_dialog is not None or self._conflict_decision_hash == modHash:
+                    # Coalesce duplicate conflict notifications generated by
+                    # repeated clicks while the first decision is open.
+                    return
+                if self._conflict_request_hash not in (None, modHash):
+                    return
+                self._conflict_request_hash = None
+                self._conflict_decision_hash = modHash
                 self.progressDialog.hide()
 
                 new_mod_name = self.mods.mods[modHash].name if modHash in self.mods.mods else "New Mod"
@@ -614,15 +851,26 @@ class ModLoader(QMainWindow):
                 btn_ok.clicked.connect(diag.accept)
                 btn_cancel.clicked.connect(diag.reject)
 
-                if diag.exec() == QDialog.Accepted:
+                self._conflict_dialog = diag
+                try:
+                    result = diag.exec()
+                finally:
+                    self._conflict_dialog = None
+
+                if result == QDialog.Accepted:
                     if bg.checkedId() == 1:
                         # High Priority: New Mod -> Overwrite installed conflicting mods
-                        self.controller.installMod(modHash)
+                        self._startInstallSequence([modHash])
                     else:
-                        # High Priority: Installed Mod -> Install new mod first, then re-apply installed conflicting mods on top
-                        self.controller.installMod(modHash)
-                        for ch in modConflictHashes:
-                            self.controller.installMod(ch)
+                        # High Priority: install the new mod first, then
+                        # restore each installed conflict in order.  Never
+                        # enqueue these worker operations concurrently.
+                        self._startInstallSequence([modHash, *modConflictHashes])
+                else:
+                    self._abortInstallSequence()
+                    # Keep stale duplicate notifications from reopening the
+                    # same dialog; a new explicit install click clears this.
+                    self._conflict_decision_hash = modHash
 
 
             # Installing
@@ -658,7 +906,16 @@ class ModLoader(QMainWindow):
                 # Update main view if it's the selected one
                 if self.mods.selectedModButton and self.mods.selectedModButton.modClass.hash == modHash:
                     self.mods.updateData()
-                
+
+                # Conflict plans are deliberately advanced only after the
+                # worker reports completion.  This prevents multiple SWF
+                # writers and their progress dialogs from running together.
+                if self._install_sequence:
+                    was_stale = self._advanceInstallSequence(modHash)
+                    if was_stale or self._install_sequence:
+                        self.showErrorNotifications()
+                        return
+
                 if hasattr(self, 'bulkTotalCount') and self.bulkTotalCount > 0:
                     self.bulkCompletedCount += 1
                     self.progressDialog.setValue(self.bulkCompletedCount)
@@ -678,9 +935,6 @@ class ModLoader(QMainWindow):
                         self.buttonsDialog.setContent(TextFormatter.format(f"Mod preset <b>'{pname}'</b> has been loaded and synced successfully!", 11))
                         self.buttonsDialog.setButtons([("OK", self.buttonsDialog.hide)])
                         self.buttonsDialog.show()
-                    
-                if self.currentSortField == "Installed":
-                    self.mods.applySort(self.currentSortField, self.currentSortReverse)
                     
                 self.showErrorNotifications()
 
@@ -734,9 +988,6 @@ class ModLoader(QMainWindow):
                         self.buttonsDialog.setButtons([("OK", self.buttonsDialog.hide)])
                         self.buttonsDialog.show()
                     
-                if self.currentSortField == "Installed":
-                    self.mods.applySort(self.currentSortField, self.currentSortReverse)
-                    
                 self.showErrorNotifications()
 
             elif ntype in [NotificationType.CompileModSourcesSpriteHasNoSymbolclass,  # Compiler
@@ -749,6 +1000,7 @@ class ModLoader(QMainWindow):
                            NotificationType.CompileModSourcesDuplicateSpriteId,
                            NotificationType.CompileModSourcesGeneralError,
                            NotificationType.LoadingModIsEmpty,  # Loader
+                           NotificationType.LoadingModError,
                            NotificationType.InstallingModNotFoundFileElement,  # Installer
                            NotificationType.InstallingModNotFoundGameSwf,
                            NotificationType.InstallingModSwfScriptError,
@@ -763,44 +1015,24 @@ class ModLoader(QMainWindow):
                     self.showErrorNotifications()
 
             elif ntype == NotificationType.FatalError:
+                self._abortInstallSequence()
                 self.showError("Fatal Error:", notification.args[0])
 
         elif cmd == Environment.ReloadMods:
             FlowTracer.new_session("Environment.ReloadMods received from Core")
             FlowTracer.log("Environment.ReloadMods", f"Count mods: {len(self.mods.mods)}")
+            self._abortInstallSequence()
+            self._mods_load_generation += 1
+            self._pending_mod_data = []
+            self._mod_data_waiting_for_language = None
+            self.mods.cancelDeferredListWork()
+            print("[ReloadMods] Clearing previous mod cards...", flush=True)
             self.mods.removeAllMods()
+            print("[ReloadMods] Previous mod cards cleared.", flush=True)
 
         elif cmd == Environment.GetModsData:
             FlowTracer.log("Environment.GetModsData", f"Received {len(data[1])} mods from Core")
-            for modData in data[1]:
-                self.mods.addMod(gameVersion=modData.get("gameVersion", ""),
-                                 name=modData.get("name", ""),
-                                 author=modData.get("author", ""),
-                                 version=modData.get("version", ""),
-                                 description=modData.get("description", ""),
-                                 tags=modData.get("tags", []),
-                                 previewsPaths=modData.get("previewsPaths", []),
-                                 hash=modData.get("hash", ""),
-                                 platform=modData.get("platform", ""),
-                                 installed=modData.get("installed", False),
-                                 currentVersion=modData.get("currentVersion", False),
-                                 modFileExist=modData.get("modFileExist", False),
-                                 date=modData.get("date", 0.0),
-                                 favorite=modData.get("hash", "") in self.config.favorites,
-                                 swfNames=modData.get("swfNames", []),
-                                 fileNames=modData.get("fileNames", []),
-                                 spriteNames=modData.get("spriteNames", []),
-                                 modPath=modData.get("modPath", ""),
-                                 swfs=modData.get("swfs", {}))
-
-            FlowTracer.log("applySort_start", "At end of GetModsData")
-            self.mods.applySort(self.currentSortField, self.currentSortReverse)
-            FlowTracer.log("applySort_end", "Finished applySort in GetModsData")
-            if hasattr(self, 'loading'):
-                self.loading.setStep(4, "success", "Mods loaded")
-                self.loading.setStep(5, "success")
-            self.setModsScreen()
-            self.showErrorNotifications()
+            self._start_mod_data_load(data[1])
 
 
         elif cmd == Environment.GetModConflict:
@@ -866,6 +1098,11 @@ class ModLoader(QMainWindow):
                 if ntype == NotificationType.LoadingModIsEmpty:
                     string = f"Mod '{notif.args[1]}' is empty"
 
+                elif ntype == NotificationType.LoadingModError:
+                    mod_path, error_summary, error_details = notif.args
+                    string = (f"Could not load '{mod_path or '<cached mod>'}': {error_summary}\n\n"
+                              f"{error_details}")
+
                 # Installer
                 elif ntype == NotificationType.InstallingModNotFoundFileElement:
                     string = f"Not found element '{notif.args[1]}' in bmod "
@@ -929,6 +1166,7 @@ class ModLoader(QMainWindow):
 
     @QExecMainThread
     def showError(self, title, content, action=None, terminate=False):
+        self._abortInstallSequence()
         self.buttonsDialog.setTitle(title)
 
         if self.acceptDialog.isShown():
@@ -979,11 +1217,12 @@ class ModLoader(QMainWindow):
         cb.setText(text, mode=QClipboard.Mode.Clipboard)
 
     def setLoadingScreen(self):
-        ClearFrame(self.ui.mainFrame)
-        AddToFrame(self.ui.mainFrame, self.loading)
+        self.header.hide()
+        self.screenStack.setCurrentWidget(self.loading)
         self.loading.setText("Loading mods sources...")
 
     def setModsScreen(self):
+        self.header.show()
         self.header.ui.modsButton.setChecked(True)
         self.header.ui.gamebananaButton.setChecked(False)
         self.header.ui.settingsButton.setChecked(False)
@@ -991,9 +1230,7 @@ class ModLoader(QMainWindow):
         self.header.ui.gamebananaLine.hide()
         self.header.ui.settingsLine.hide()
 
-        ClearFrame(self.ui.mainFrame)
-        AddToFrame(self.ui.mainFrame, self.header)
-        AddToFrame(self.ui.mainFrame, self.mods)
+        self.screenStack.setCurrentWidget(self.mods)
         if self.reloadPending:
             self.setLoadingScreen()
             # Refresh the list of installed mods in the browser
@@ -1003,6 +1240,7 @@ class ModLoader(QMainWindow):
             self.reloadPending = False
 
     def setGamebananaScreen(self):
+        self.header.show()
         self.header.ui.modsButton.setChecked(False)
         self.header.ui.gamebananaButton.setChecked(True)
         self.header.ui.settingsButton.setChecked(False)
@@ -1010,11 +1248,10 @@ class ModLoader(QMainWindow):
         self.header.ui.gamebananaLine.show()
         self.header.ui.settingsLine.hide()
 
-        ClearFrame(self.ui.mainFrame)
-        AddToFrame(self.ui.mainFrame, self.header)
-        AddToFrame(self.ui.mainFrame, self.gamebanana)
+        self.screenStack.setCurrentWidget(self.gamebanana)
 
     def setSettingsScreen(self):
+        self.header.show()
         self.header.ui.modsButton.setChecked(False)
         self.header.ui.gamebananaButton.setChecked(False)
         self.header.ui.settingsButton.setChecked(True)
@@ -1022,9 +1259,7 @@ class ModLoader(QMainWindow):
         self.header.ui.gamebananaLine.hide()
         self.header.ui.settingsLine.show()
 
-        ClearFrame(self.ui.mainFrame)
-        AddToFrame(self.ui.mainFrame, self.header)
-        AddToFrame(self.ui.mainFrame, self.settings)
+        self.screenStack.setCurrentWidget(self.settings)
 
     def checkUnsavedSettings(self, nextScreenMethod):
         if self.settings.hasUnsavedChanges:
@@ -1061,8 +1296,7 @@ class ModLoader(QMainWindow):
             self.controller.setModsPath(self.modsPath)
             
             if self.config.brawlhallaPath:
-                core.worker.config.ModloaderCoreConfig.customBrawlhallaPath = self.config.brawlhallaPath
-                core.worker.config.ModloaderCoreConfig.save()
+                os.environ["BMODS_BRAWLHALLA_PATH"] = self.config.brawlhallaPath
 
     def openCacheFolder(self):
         os.startfile(core.MODLOADER_CACHE_PATH)
@@ -1407,11 +1641,7 @@ class ModLoader(QMainWindow):
         if os.path.exists(folder) and (os.path.isfile(os.path.join(folder, "Brawlhalla.exe")) or "Brawlhalla.exe" in os.listdir(folder)):
             self.config.brawlhallaPath = folder
             self.config.save()
-            if hasattr(core, 'worker') and hasattr(core.worker, 'config'):
-                core.worker.config.ModloaderCoreConfig.customBrawlhallaPath = folder
-                core.worker.config.ModloaderCoreConfig.save()
-            if hasattr(core, 'worker') and hasattr(core.worker, 'brawlhalla'):
-                core.worker.brawlhalla.BRAWLHALLA_PATH = folder
+            os.environ["BMODS_BRAWLHALLA_PATH"] = folder
                 
             if hasattr(self, 'controller') and self.controller and hasattr(self.controller, 'reloadMods'):
                 self.controller.reloadMods()
@@ -1428,6 +1658,59 @@ class ModLoader(QMainWindow):
             self.acceptDialog.setAccept(self.showBrawlhallaNotFoundDialog)
             self.acceptDialog.setCancel(self.acceptDialog.hide)
             self.acceptDialog.show()
+
+    def _startInstallSequence(self, hashes):
+        """Install a conflict-resolution plan one mod at a time."""
+        unique_hashes = []
+        for mod_hash in hashes or []:
+            if mod_hash and mod_hash not in unique_hashes:
+                unique_hashes.append(mod_hash)
+
+        if not unique_hashes or self._install_sequence or self._active_install_hash:
+            return False
+
+        self._install_sequence = unique_hashes
+        self._install_sequence_index = 0
+        self._active_install_hash = unique_hashes[0]
+        self.bulkOperationCount = max(self.bulkOperationCount, len(unique_hashes))
+        self.controller.installMod(self._active_install_hash)
+        return True
+
+    def _abortInstallSequence(self):
+        self._conflict_request_hash = None
+        self._conflict_decision_hash = None
+        self._install_sequence = []
+        self._install_sequence_index = 0
+        self._active_install_hash = None
+        self.bulkOperationCount = 0
+        if hasattr(self, 'progressDialog'):
+            self.progressDialog.hide()
+
+    def _advanceInstallSequence(self, finished_hash):
+        """Start the next queued reinstall after the previous one finished."""
+        if not self._install_sequence:
+            return False
+        if finished_hash != self._active_install_hash:
+            # A stale notification from an older request must not advance the
+            # current plan or start another worker thread.
+            print(
+                f"[Install] Ignoring stale completion for {finished_hash!r}; "
+                f"active={self._active_install_hash!r}",
+                flush=True,
+            )
+            return True
+
+        self._install_sequence_index += 1
+        if self._install_sequence_index < len(self._install_sequence):
+            self.bulkOperationCount = max(1, self.bulkOperationCount - 1)
+            self._active_install_hash = self._install_sequence[self._install_sequence_index]
+            self.controller.installMod(self._active_install_hash)
+        else:
+            self._install_sequence = []
+            self._install_sequence_index = 0
+            self._active_install_hash = None
+            self._conflict_decision_hash = None
+        return False
 
     def installMod(self, modTarget=None):
         bh_path = getattr(core.worker.brawlhalla, 'BRAWLHALLA_PATH', None) if (hasattr(core, 'worker') and hasattr(core.worker, 'brawlhalla')) else None
@@ -1449,6 +1732,17 @@ class ModLoader(QMainWindow):
             targetHash = self.mods.selectedModButton.modClass.hash
 
         if targetHash:
+            # A cancelled/finished decision only suppresses stale duplicate
+            # notifications; a new explicit click starts a fresh search.
+            self._conflict_decision_hash = None
+            if (self._conflict_dialog is not None or self._conflict_request_hash or
+                    self._active_install_hash or self._install_sequence):
+                print(
+                    f"[Install] Ignoring duplicate request for {targetHash!r}; "
+                    "another install/conflict operation is already active.",
+                    flush=True,
+                )
+                return
             mod_obj = self.mods.mods.get(targetHash)
             if mod_obj:
                 from ui.utils.tags_helper import validate_color_mod_schemes, detect_special_mod_types
@@ -1473,18 +1767,28 @@ class ModLoader(QMainWindow):
 
             if self.bulkOperationCount <= 0:
                 self.bulkOperationCount = 1
+            self._conflict_request_hash = targetHash
             self.controller.getModConflict(targetHash)
 
-    def toggleFavorite(self, modHash):
+    def toggleFavorite(self, modHash, is_favorite=None):
         favorites = self.config.favorites.copy()
-        if modHash in favorites:
-            favorites.remove(modHash)
-        else:
+        if is_favorite is None:
+            is_favorite = modHash not in favorites
+        if is_favorite and modHash not in favorites:
             favorites.append(modHash)
+        elif not is_favorite and modHash in favorites:
+            favorites.remove(modHash)
         self.config.favorites = favorites
-        
-        # Trigger re-sort using CURRENT sort settings
-        self.mods.applySort(self.currentSortField, self.currentSortReverse)
+
+        # Do not rebuild 302 cards from a star click.  Apart from making the
+        # click look like it did nothing, that destroys the clicked widget
+        # while Qt is still delivering its mouse event.  Update every visible
+        # representation of this mod in place; normal sorting/reload will
+        # later place favorites at the top as usual.
+        for button in list(self.mods.modsButtons):
+            if button.modClass.hash == modHash:
+                button.modClass.favorite = is_favorite
+                button.updateData()
 
     def uninstallMod(self, modButton=None):
         if self.checkGameRunning():
@@ -1519,7 +1823,11 @@ class ModLoader(QMainWindow):
                     err_msg or "Cannot install color mods that replace non-paid color schemes of the game due to community guidelines."
                 )
                 return
+            if self._conflict_request_hash or self._active_install_hash or self._install_sequence:
+                print("[Install] Ignoring reinstall request while another operation is active.", flush=True)
+                return
             self.controller.uninstallMod(modClass.hash)
+            self._conflict_request_hash = modClass.hash
             self.controller.getModConflict(modClass.hash)
 
     def deleteMod(self):
@@ -1633,6 +1941,14 @@ class ModLoader(QMainWindow):
         return list(set(names))
 
     def reloadMods(self):
+        # Cancel a queued incremental population before asking Core for fresh
+        # metadata.  This prevents stale cards from reappearing after refresh.
+        self._abortInstallSequence()
+        self._mods_load_generation += 1
+        self._pending_mod_data = []
+        self._pending_mod_index = 0
+        self.mods._defer_selection = False
+        self.mods.cancelDeferredListWork()
         self.setLoadingScreen()
         if self.controller:
             self.controller.reloadMods()
@@ -1649,7 +1965,9 @@ class ModLoader(QMainWindow):
         modClass = self.mods.selectedModButton.modClass
         modClass.modFileExist = False
         self.controller.deleteMod(modClass.hash)
-        self.reloadMods()
+        # The core already removed the file; update only this row instead of
+        # rescanning and rebuilding the complete mod list.
+        self.mods.removeMod(modClass.hash)
         self.buttonsDialog.hide()
 
     def resizeEvent(self, event):
@@ -2239,6 +2557,9 @@ class BmodsSplash(QSplashScreen):
 
 def RunApp():
     app = QApplication.instance() or QApplication(sys.argv)
+    app.aboutToQuit.connect(
+        lambda: print("[App] QApplication requested shutdown.", flush=True)
+    )
 
     font_db = QFontDatabase
     font_db.addApplicationFont(":/fonts/resources/fonts/Exo 2/Exo2-SemiBold.ttf")
@@ -2289,6 +2610,7 @@ def RunApp():
     InitWindowClose()
 
     exitId = app.exec()
+    print(f"[App] Qt event loop exited with code {exitId}.", flush=True)
     TerminateApp(exitId)
 
 

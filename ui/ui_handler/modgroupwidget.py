@@ -296,4 +296,3 @@ class ModGroupWidget(QWidget):
         for btn in self.mod_buttons:
             if hasattr(btn, 'onParentResize'):
                 btn.onParentResize()
-

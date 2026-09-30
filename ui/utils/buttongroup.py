@@ -1,10 +1,10 @@
 from typing import Dict
 
-from PySide6.QtWidgets import QWidget, QPushButton
-from PySide6.QtCore import QEvent
+from PySide6.QtWidgets import QPushButton
+from PySide6.QtCore import QObject
 
 
-class ButtonGroup(QWidget):
+class ButtonGroup(QObject):
     _groups: Dict[str, list] = {}
 
     def __init__(self, group: str, button: QPushButton, isDefault: bool = False, method=None):
@@ -28,9 +28,13 @@ class ButtonGroup(QWidget):
             self.button.setChecked(True)
             self.pressedMethod()
 
-        super().__init__()
-
-        self.button.installEventFilter(self)
+        # Keep the controller owned by its button, but use the native button
+        # signals instead of an event filter.  Event filters were being
+        # called while Qt was garbage-collecting during window resize and
+        # could dereference an invalid QEvent wrapper.
+        super().__init__(button)
+        self.button.pressed.connect(self.pressed)
+        self.button.released.connect(self.released)
 
     def remove(self):
         self._groups[self.group].pop(self)
@@ -53,27 +57,6 @@ class ButtonGroup(QWidget):
 
     def leave(self):
         pass
-
-    def eventFilter(self, qobject, event):
-        #if event.type() not in [QEvent.HoverMove, QEvent.PolishRequest, QEvent.Paint, QEvent.MouseMove]:
-        #    print(event.type())
-
-        if event.type() == QEvent.Enter:
-            self.enter()
-
-        elif event.type() == QEvent.Leave:
-            self.leave()
-
-        elif event.type() == QEvent.MouseButtonPress:
-            return self.pressed()
-
-        elif event.type() == QEvent.MouseButtonRelease:
-            return self.released()
-
-        elif event.type() == QEvent.MouseButtonDblClick:
-            return True
-
-        return False
 
     @classmethod
     def getGroup(cls, group: str) -> list:
